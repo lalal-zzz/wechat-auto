@@ -156,30 +156,75 @@ class MomentsSkill(BaseSkill):
         return all_posts
 
     # ------------------------------------------------------------------
-    # Stubs: Comment / Publish / Friend Moments / Own Moments
+    # Implemented: Comment
     # ------------------------------------------------------------------
 
+    @retry_on_failure(max_retries=2, delay=1.0)
     def comment_moment(self, post_index: int = 0, comment: str = "") -> None:
         """Comment on a Moments post.
 
         Args:
-            post_index: Index of the post.
+            post_index: Index of the post in visible list (0 = topmost).
             comment: Comment text.
 
-        Note: Stub - not yet implemented.
+        Raises:
+            MomentsError: If commenting fails.
         """
-        raise NotImplementedError("comment_moment() is not yet implemented.")
+        logger.info("Commenting on post %d: %s", post_index, comment[:40])
+        self._activate()
+        self._open_moments()
+        time.sleep(self._config.action_delay)
 
-    def publish_moment(self, text: str = "", image_paths: list[str] = None) -> None:
-        """Publish a new Moments post.
+        posts = self._get_post_elements()
+        if post_index >= len(posts):
+            raise MomentsError(f"Post index {post_index} out of range ({len(posts)} visible).")
+
+        post = posts[post_index]
+
+        # Step 1: Expand the interaction menu (..) button
+        self._expand_interaction_menu(post)
+        time.sleep(self._config.click_delay)
+
+        # Step 2: Click the comment button
+        self._click_comment_button(post)
+        time.sleep(self._config.action_delay)
+
+        # Step 3: Type the comment and submit
+        self._type_and_submit_comment(comment)
+        time.sleep(self._config.after_send_delay)
+        logger.info("Comment posted successfully.")
+
+    # ------------------------------------------------------------------
+    # Implemented: Timeline
+    # ------------------------------------------------------------------
+
+    def get_my_timeline(self, limit: int = 20, hours_range: int = 0) -> list[dict]:
+        """Get the Moments timeline (all friends' recent posts).
+
+        Opens the Moments feed and scrolls to collect posts up to the
+        specified limit. If hours_range is set, filters by time text.
 
         Args:
-            text: Post text content.
-            image_paths: Optional list of image file paths.
+            limit: Max posts to retrieve.
+            hours_range: Only posts within last X hours (0 = no filter).
 
-        Note: Stub - not yet implemented.
+        Returns:
+            List of post dicts: author, content, time, likes, comments.
         """
-        raise NotImplementedError("publish_moment() is not yet implemented.")
+        logger.info("Getting timeline (limit=%d, hours=%d).", limit, hours_range)
+        # get_my_timeline is essentially a browse with more control
+        scroll_times = max(1, limit // 5 + 1)
+        all_posts = self.browse(scroll_times=scroll_times)
+
+        # Apply limit
+        all_posts = all_posts[:limit]
+
+        # Filter by hours_range if specified
+        if hours_range > 0:
+            all_posts = self._filter_by_hours(all_posts, hours_range)
+
+        logger.info("Timeline: %d posts collected.", len(all_posts))
+        return all_posts
 
     def get_friend_moments(self, friend_name: str, limit: int = 10) -> dict:
         """Get a specific friend's Moments feed.
@@ -191,23 +236,14 @@ class MomentsSkill(BaseSkill):
         Returns:
             Dict with status (SUCCESS/EMPTY/NO_ACCESS) and posts list.
 
-        Note: Stub - not yet implemented.
+        Note:
+            Requires navigating to the friend's profile and accessing
+            their Moments. This is complex and not fully automated.
         """
-        raise NotImplementedError("get_friend_moments() is not yet implemented.")
-
-    def get_my_timeline(self, limit: int = 20, hours_range: int = 24) -> list[dict]:
-        """Get the Moments timeline (all friends' recent posts).
-
-        Args:
-            limit: Max posts to retrieve.
-            hours_range: Only posts within last X hours.
-
-        Returns:
-            List of post dicts.
-
-        Note: Stub - not yet implemented.
-        """
-        raise NotImplementedError("get_my_timeline() is not yet implemented.")
+        raise NotImplementedError(
+            "get_friend_moments() requires profile navigation which "
+            "is not yet implemented. Use get_my_timeline() instead."
+        )
 
     def get_my_own_moments(self, limit: int = 10) -> list[dict]:
         """Get own published Moments history.
@@ -218,9 +254,113 @@ class MomentsSkill(BaseSkill):
         Returns:
             List of own post dicts.
 
-        Note: Stub - not yet implemented.
+        Note:
+            Requires navigating to own profile which is not yet automated.
         """
-        raise NotImplementedError("get_my_own_moments() is not yet implemented.")
+        raise NotImplementedError(
+            "get_my_own_moments() requires profile navigation which "
+            "is not yet implemented."
+        )
+
+    def publish_moment(self, text: str = "", image_paths: list[str] = None) -> None:
+        """Publish a new Moments post.
+
+        Args:
+            text: Post text content.
+            image_paths: Optional list of image file paths.
+
+        Note:
+            Requires clicking the camera/publish button and handling
+            the post composition window.
+        """
+        raise NotImplementedError(
+            "publish_moment() requires post composition window handling "
+            "which is not yet implemented."
+        )
+
+    # ------------------------------------------------------------------
+    # Private helpers for comment_moment
+    # ------------------------------------------------------------------
+
+    def _expand_interaction_menu(self, post_element) -> None:
+        """Click the interaction expand button (..) on a post."""
+        try:
+            # Look for a button at the bottom-right of the post
+            children = post_element.children()
+            for child in children:
+                try:
+                    if child.element_info.control_type == "Button":
+                        self._finder.click(child)
+                        return
+                except Exception:
+                    continue
+            # Fallback: try clicking by coordinate
+            rect = post_element.rectangle()
+            x = rect.right - 20
+            y = rect.bottom - 20
+            self.window.click_input(coords=(x, y))
+        except Exception as exc:
+            raise MomentsError("Failed to expand interaction menu.") from exc
+
+    def _click_comment_button(self, post_element) -> None:
+        """Click the comment button in the expanded interaction menu."""
+        try:
+            comment_btn = self._finder.find_child_by_title(
+                post_element, self._config.kw_moments_comment, timeout=3.0
+            )
+            self._finder.click(comment_btn)
+        except Exception as exc:
+            raise MomentsError("Failed to click comment button.") from exc
+
+    def _type_and_submit_comment(self, text: str) -> None:
+        """Type comment text into the comment box and submit."""
+        try:
+            edit_boxes = self._finder.find_all_children(self.window, control_type="Edit")
+            if not edit_boxes:
+                raise MomentsError("Comment input box not found.")
+            comment_box = edit_boxes[-1]
+            comment_box.click_input()
+            time.sleep(self._config.click_delay)
+
+            from wechat_auto.utils.clipboard import ClipboardHelper
+            from wechat_auto.utils.keyboard import KeyboardHelper
+
+            ClipboardHelper.set_text(text)
+            KeyboardHelper.paste(self.window)
+            time.sleep(self._config.action_delay)
+            KeyboardHelper.press_enter(self.window)
+        except MomentsError:
+            raise
+        except Exception as exc:
+            raise MomentsError("Failed to submit comment.") from exc
+
+    def _filter_by_hours(self, posts: list[dict], hours: int) -> list[dict]:
+        """Filter posts by time within the specified hours range.
+
+        This is a best-effort heuristic filter based on time text in posts.
+        Returns all posts if time parsing fails.
+        """
+        import re
+
+        filtered: list[dict] = []
+        for post in posts:
+            time_str = post.get("time", "")
+            # Try to parse patterns like "X小时前", "X分钟前"
+            hour_match = re.search(r"(\d+)\s*小时前", time_str)
+            minute_match = re.search(r"(\d+)\s*分钟前", time_str)
+
+            if hour_match:
+                post_hours = int(hour_match.group(1))
+                if post_hours <= hours:
+                    filtered.append(post)
+            elif minute_match:
+                # Minutes ago is always within the hours range
+                filtered.append(post)
+            else:
+                # Can't parse time, include it
+                filtered.append(post)
+
+        return filtered
 
     # ------------------------------------------------------------------
     # Private helpers

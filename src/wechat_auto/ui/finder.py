@@ -200,7 +200,11 @@ class ElementFinder:
 
         In the new WeChat (Weixin), pressing Enter in the search box opens
         "搜一搜" (WeChat Search) instead of selecting the first chat result.
-        Therefore we click the first result in the search dropdown by coordinate.
+        Therefore we click the first result in the search dropdown.
+
+        Strategy:
+            1. Try to find and click a ListItem matching the name
+            2. Fall back to coordinate-based click if no ListItem found
         """
         from wechat_auto.utils.clipboard import ClipboardHelper
         from wechat_auto.utils.keyboard import KeyboardHelper
@@ -216,25 +220,55 @@ class ElementFinder:
         KeyboardHelper.paste(win)
         time.sleep(self._config.search_timeout)
 
-        # Step 3: Click the first search result instead of pressing Enter
-        # (Enter opens 搜一搜 in new WeChat)
-        self._click_first_search_result(win)
+        # Step 3: Click the first search result
+        # Strategy 1: Try to find ListItem elements and click the first match
+        clicked = self._click_search_result_by_listitem(win, chat_name)
+        if not clicked:
+            # Strategy 2: Fall back to coordinate-based click
+            self._click_first_search_result(win)
         time.sleep(self._config.action_delay)
         logger.info("Opened chat: %s", chat_name)
 
-    def _click_first_search_result(self, win) -> None:
-        """Click the first chat result in the search dropdown.
+    def _click_search_result_by_listitem(self, win, chat_name: str) -> bool:
+        """Try to click a search result by finding ListItem controls.
 
-        The search result list appears below the search box in the left panel.
-        The first chat result is typically at a fixed offset from the window top-left.
+        Returns:
+            True if a result was found and clicked, False otherwise.
+        """
+        try:
+            items = self.find_all_children(win, control_type="ListItem")
+            if not items:
+                return False
+
+            # Try to find a matching item first
+            for item in items:
+                try:
+                    text = item.window_text()
+                    if chat_name in text or text in chat_name:
+                        self.click(item)
+                        logger.debug("Clicked search result ListItem: %s", text)
+                        return True
+                except Exception:
+                    continue
+
+            # No exact match, click the first result
+            self.click(items[0])
+            logger.debug("Clicked first search result ListItem (no exact match).")
+            return True
+        except Exception as exc:
+            logger.debug("ListItem search click failed: %s", exc)
+            return False
+
+    def _click_first_search_result(self, win) -> None:
+        """Click the first chat result in the search dropdown by coordinate.
+
+        Fallback when ListItem-based click fails.
         """
         import ctypes
         user32 = ctypes.windll.user32
 
         rect = win.rectangle()
         # Search results appear in the left panel, below the search bar
-        # Left panel is roughly the left 30% of the window
-        # First result is approximately at 15% from left, 18% from top
         x = rect.left + int((rect.right - rect.left) * 0.15)
         y = rect.top + int((rect.bottom - rect.top) * 0.18)
         logger.debug("Clicking first search result at (%d, %d)", x, y)

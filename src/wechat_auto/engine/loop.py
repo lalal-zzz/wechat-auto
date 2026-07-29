@@ -189,6 +189,9 @@ class AgentLoop:
         from wechat_auto.skills.history import HistorySkill
         from wechat_auto.skills.contact import ContactSkill
         from wechat_auto.skills.moments import MomentsSkill
+        from wechat_auto.skills.unread import UnreadSkill
+        from wechat_auto.skills.group_at import GroupAtSkill
+        from wechat_auto.skills.channels import ChannelsSkill
 
         # Initialize skills
         skills = [
@@ -198,6 +201,9 @@ class AgentLoop:
             HistorySkill(self._application, self._finder, self._config, self._session, self._healer),
             ContactSkill(self._application, self._finder, self._config, self._session, self._healer),
             MomentsSkill(self._application, self._finder, self._config, self._session, self._healer),
+            UnreadSkill(self._application, self._finder, self._config, self._session, self._healer),
+            GroupAtSkill(self._application, self._finder, self._config, self._session, self._healer),
+            ChannelsSkill(self._application, self._finder, self._config, self._session, self._healer),
         ]
 
         for skill in skills:

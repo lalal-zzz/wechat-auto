@@ -28,6 +28,10 @@ desktop.ini
 htmlcov/
 .coverage
 
+# Test output
+test_output.txt
+test_run*.txt
+
 # Logs
 *.log
 

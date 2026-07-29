@@ -8,7 +8,7 @@ import time
 from typing import Any
 
 from wechat_auto.skills.base import BaseSkill
-from wechat_auto.exceptions import SendMessageError
+from wechat_auto.exceptions import SendMessageError, ContactNotFoundError
 from wechat_auto.utils.clipboard import ClipboardHelper
 from wechat_auto.utils.keyboard import KeyboardHelper
 from wechat_auto.utils.retry import retry_on_failure
@@ -126,6 +126,52 @@ class MessagingSkill(BaseSkill):
     # ------------------------------------------------------------------
     # Private helpers
     # ------------------------------------------------------------------
+
+    def _open_chat(self, chat_name: str) -> None:
+        """Open chat via contacts tab (not global search).
+
+        Per the design principle: contacts must be searched using
+        the contacts-tab dedicated search box, NOT the global search
+        (Ctrl+F), to avoid confusing contacts with official accounts.
+
+        Falls back to global search if the contact is not found in
+        the contacts tab (e.g. system contacts like 文件传输助手).
+        """
+        logger.info("Opening chat via contacts tab: %s", chat_name)
+
+        try:
+            # Navigate to contacts tab
+            self._finder.navigate_to_contacts()
+            time.sleep(self._config.action_delay)
+
+            # Open the contacts-tab search box
+            self._finder.open_search()
+            time.sleep(self._config.action_delay)
+
+            # Paste the contact name
+            ClipboardHelper.set_text(chat_name)
+            KeyboardHelper.paste(self.window)
+            time.sleep(self._config.search_timeout)
+
+            # Click the first matching result
+            items = self._finder.find_all_children(self.window, control_type="ListItem")
+            if items:
+                self._finder.click(items[0])
+                time.sleep(self._config.action_delay)
+                KeyboardHelper.press_escape(self.window)
+                time.sleep(self._config.action_delay)
+                logger.info("Opened chat via contacts: %s", chat_name)
+                return
+
+            # No results in contacts tab, fall back to global search
+            logger.info("Contact '%s' not in contacts tab, trying global search.", chat_name)
+            KeyboardHelper.press_escape(self.window)
+            time.sleep(self._config.action_delay)
+        except Exception as exc:
+            logger.debug("Contacts tab search failed: %s, falling back to global.", exc)
+
+        # Fallback: use global search (Ctrl+F)
+        self._finder.open_chat(chat_name)
 
     def _find_message_box(self):
         """Locate the message input edit box in the current chat."""
