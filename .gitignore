@@ -1,0 +1,55 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Testing
+.pytest_cache/
+htmlcov/
+.coverage
+
+# Logs
+*.log
+
+# Privacy & Secrets
+.env
+.env.*
+*.pem
+*.key
+*.p12
+*.pfx
+config.local.*
+secrets.*
+
+# Screenshots / captures (may contain personal chat content)
+screenshots/
+captures/
+*.png
+*.jpg
+*.bmp
+
+# Local data / chat exports
+exports/
+data/
+*.db
+*.sqlite
