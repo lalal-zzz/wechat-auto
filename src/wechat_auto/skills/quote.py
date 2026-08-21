@@ -135,14 +135,43 @@ class QuoteSkill(BaseSkill):
             return None
 
     def _click_context_menu_item(self, keyword: str) -> None:
-        """Click an item in the right-click context menu."""
+        """Click an item in the right-click context menu.
+
+        WeChat context menus appear as independent top-level popup windows,
+        NOT as children of the main window. We capture the popup from the
+        Desktop and search within it.
+        """
+        # Strategy 1: Search in main window first (some UI versions embed the menu)
         try:
             menu_item = self._finder.find_child_by_title(
-                self.window, keyword, timeout=self._config.find_element_timeout
+                self.window, keyword, timeout=1.0
             )
             self._finder.click(menu_item)
-        except Exception as exc:
-            raise ElementNotFoundError(f"Context menu item '{keyword}' not found.") from exc
+            logger.debug("Found context menu item '%s' in main window.", keyword)
+            return
+        except Exception:
+            pass
+
+        # Strategy 2: Capture from Desktop — context menu is a top-level popup
+        try:
+            from pywinauto import Desktop
+            desktop = Desktop(backend=self._config.backend)
+            # Search all top-level windows for the menu keyword
+            for win_spec in desktop.windows():
+                try:
+                    cls = win_spec.class_name()
+                    # WeChat context menus use class names like these
+                    if any(k in cls for k in ("Menu", "Popup", "WeChat", "Qt")):
+                        item = win_spec.child_window(title=keyword, timeout=0.5)
+                        item.click_input()
+                        logger.debug("Clicked context menu item '%s' in popup window.", keyword)
+                        return
+                except Exception:
+                    continue
+        except Exception:
+            pass
+
+        raise ElementNotFoundError(f"Context menu item '{keyword}' not found.")
 
     def _type_and_send_reply(self, text: str) -> None:
         """Type reply text and press Enter to send."""

@@ -7,7 +7,7 @@ import pytest
 from wechat_auto.utils.keyboard import KeyboardHelper
 from wechat_auto.utils.retry import retry_on_failure
 from wechat_auto.ui.finder import ElementFinder
-from wechat_auto.exceptions import ElementNotFoundError
+from wechat_auto.exceptions import ChatNotFoundError, ElementNotFoundError
 
 
 # ==================================================================
@@ -284,8 +284,63 @@ class TestElementFinder:
         with patch("wechat_auto.ui.finder.time.sleep"):
             with patch("wechat_auto.utils.clipboard.ClipboardHelper") as mock_clip:
                 with patch("wechat_auto.utils.keyboard.KeyboardHelper") as mock_kb:
-                    with patch.object(finder, "_click_first_search_result"):
+                    with patch.object(finder, "click_unique_exact_list_item", return_value=True):
                         finder.open_chat("张三")
 
         mock_clip.set_text.assert_called_once_with("张三")
         mock_kb.paste.assert_called_once()
+
+    def test_open_chat_refuses_non_exact_search_result(self, mock_app, config):
+        mock_window = MagicMock()
+        mock_app.main_window = mock_window
+        finder = ElementFinder(mock_app, config)
+
+        with patch("wechat_auto.ui.finder.time.sleep"):
+            with patch("wechat_auto.utils.clipboard.ClipboardHelper"):
+                with patch("wechat_auto.utils.keyboard.KeyboardHelper") as mock_kb:
+                    with pytest.raises(ChatNotFoundError):
+                        finder.open_chat("文件传输助手")
+
+        assert mock_window.type_keys.call_args_list == [
+            (("^f",), {}),
+            (("^a{BACKSPACE}",), {}),
+        ]
+        mock_kb.press_escape.assert_called_once_with(mock_window)
+
+    def test_click_unique_exact_list_item_refuses_first_fuzzy_result(self, mock_app, config):
+        finder = ElementFinder(mock_app, config)
+        parent = MagicMock()
+        fuzzy = MagicMock()
+        exact = MagicMock()
+        fuzzy.window_text.return_value = "文件传输助手测试群"
+        exact.window_text.return_value = "文件传输助手"
+
+        def children(target, control_type=None):
+            if target is parent and control_type == "ListItem":
+                return [fuzzy, exact]
+            return []
+
+        with patch.object(finder, "find_all_children", side_effect=children):
+            with patch.object(finder, "click") as click:
+                assert finder.click_unique_exact_list_item(parent, "文件传输助手") is True
+
+        click.assert_called_once_with(exact)
+
+    def test_click_unique_exact_list_item_refuses_ambiguous_results(self, mock_app, config):
+        finder = ElementFinder(mock_app, config)
+        parent = MagicMock()
+        first = MagicMock()
+        second = MagicMock()
+        first.window_text.return_value = "张三"
+        second.window_text.return_value = "张三"
+
+        def children(target, control_type=None):
+            if target is parent and control_type == "ListItem":
+                return [first, second]
+            return []
+
+        with patch.object(finder, "find_all_children", side_effect=children):
+            with patch.object(finder, "click") as click:
+                assert finder.click_unique_exact_list_item(parent, "张三") is False
+
+        click.assert_not_called()

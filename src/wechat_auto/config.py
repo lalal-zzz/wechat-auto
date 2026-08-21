@@ -15,6 +15,11 @@ class WeChatConfig:
     wechat_title: str = "微信"
     wechat_class_name_legacy: str = "WeChatMainWndForPC"
     wechat_process_name: str = "Weixin"
+    # This library attaches to an already-running, logged-in client.  Starting
+    # Weixin from an automation process can create a second client/session.
+    auto_start: bool = False
+    executable_path: Optional[str] = None
+    launch_wait_timeout: float = 15.0
     login_class_name: str = "WeChatLoginWndForPC"
 
     # Timeouts (in seconds)
@@ -67,8 +72,8 @@ class WeChatConfig:
     kw_delete_msg: str = "删除"
     kw_reply: str = "回复"
 
-    # Optional backend (uia or win32) — win32 recommended for new WeChat (Weixin)
-    backend: str = "win32"
+    # Backend: 'uia' is required for WeChat Qt5 and DirectUI control trees
+    backend: str = "uia"
 
     # Optional log level
     log_level: str = "INFO"

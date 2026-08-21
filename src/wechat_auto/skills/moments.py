@@ -6,6 +6,8 @@ import logging
 import time
 from typing import Any, Optional
 
+from pywinauto import Desktop
+
 from wechat_auto.skills.base import BaseSkill
 from wechat_auto.exceptions import MomentsError
 from wechat_auto.utils.keyboard import KeyboardHelper
@@ -37,18 +39,61 @@ class MomentsSkill(BaseSkill):
     # ------------------------------------------------------------------
 
     def _open_moments(self) -> None:
-        """Navigate to the Moments feed."""
+        """Navigate to the Moments feed and capture the popup window.
+
+        WeChat Moments opens in a standalone top-level window (class SNSWnd
+        or similar), NOT embedded in the main window. We click the button
+        and then search the Desktop for the newly-appeared Moments window,
+        reassigning self._moments_window for all subsequent operations.
+        """
+        self._moments_window = None
         try:
+            # Try finding Moments button by keyword
             moments_btn = self._finder.find_child_by_title(
                 self.window,
                 self._config.kw_moments,
                 timeout=self._config.find_element_timeout,
             )
             self._finder.click(moments_btn)
-            time.sleep(self._config.page_load_timeout)
-            logger.info("Opened Moments feed.")
-        except Exception as exc:
-            raise MomentsError("Failed to open Moments.") from exc
+        except Exception:
+            # Fallback: Ctrl+4 shortcut for Moments
+            logger.debug("Moments button not found by title, trying Ctrl+4 shortcut.")
+            self.window.type_keys("^4")
+
+        # Wait for the Moments window to appear (it may take a moment to load)
+        deadline = time.monotonic() + self._config.page_load_timeout
+        while time.monotonic() < deadline:
+            time.sleep(0.5)
+            moments_win = self._find_moments_popup()
+            if moments_win:
+                self._moments_window = moments_win
+                logger.info("Captured Moments popup window.")
+                return
+
+        # Fallback: if no separate popup found, use main window
+        logger.warning("Moments popup not found; operating on main window.")
+        self._moments_window = self.window
+
+    def _find_moments_popup(self):
+        """Scan Desktop for the Moments standalone window."""
+        try:
+            desktop = Desktop(backend=self._config.backend)
+            for win in desktop.windows():
+                try:
+                    cls = win.class_name()
+                    title = win.window_text()
+                    if any(k in cls for k in ("SNSWnd", "TopStory", "SnsTimeline")) or \
+                       self._config.kw_moments in title or "朋友圈" in title:
+                        return win
+                except Exception:
+                    continue
+        except Exception:
+            pass
+        return None
+
+    def _get_active_window(self):
+        """Return the Moments window if open, otherwise the main window."""
+        return getattr(self, "_moments_window", None) or self.window
 
     # ------------------------------------------------------------------
     # Implemented: Like / Unlike
@@ -369,7 +414,8 @@ class MomentsSkill(BaseSkill):
     def _get_post_elements(self) -> list:
         """Get all visible Moments post elements."""
         try:
-            return self._finder.find_all_children(self.window, control_type="ListItem")
+            active = self._get_active_window()
+            return self._finder.find_all_children(active, control_type="ListItem")
         except Exception:
             return []
 
@@ -458,7 +504,8 @@ class MomentsSkill(BaseSkill):
     def _scroll_down(self) -> None:
         """Scroll down in the Moments feed."""
         try:
-            self.window.type_keys("{PGDN}")
+            active = self._get_active_window()
+            active.type_keys("{PGDN}")
             time.sleep(self._config.scroll_delay)
         except Exception:
             pass

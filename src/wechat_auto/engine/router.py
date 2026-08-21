@@ -53,14 +53,27 @@ class SkillRouter:
         Raises:
             SkillExecutionError: If both Tier 1 and Tier 2 fail.
         """
+        tier1_error = None
+
         # Step 1: Try Tier 1 skill
         if intent in self._skill_registry:
             try:
                 logger.info("Routing to Tier 1 skill: %s", intent)
                 return self._skill_registry[intent](**params)
             except Exception as exc:
+                tier1_error = exc
+                # Only intents that are themselves Tier 2 primitives have a
+                # defined safe fallback.  Retrying a failed high-level action
+                # such as `send_text_message` as arbitrary clicks can bypass
+                # its recipient validation.
+                if intent not in self._atomic_intents:
+                    raise SkillExecutionError(
+                        f"Tier 1 skill '{intent}' failed: {exc}"
+                    ) from exc
                 logger.warning(
-                    "Tier 1 skill '%s' failed: %s. Degrading to Tier 2.", intent, exc
+                    "Tier 1 atomic intent '%s' failed: %s. Degrading to Tier 2.",
+                    intent,
+                    exc,
                 )
 
         # Step 2: Degrade to Tier 2 atomic tools
@@ -96,6 +109,19 @@ class SkillRouter:
             return tool_map[intent](**params)
 
         raise AtomicToolError(f"Unknown atomic intent: {intent}")
+
+    @property
+    def _atomic_intents(self) -> set[str]:
+        """Intents that have an explicit Tier 2 implementation."""
+        return {
+            "click",
+            "input_text",
+            "right_click",
+            "scroll",
+            "send_keyboard_shortcut",
+            "close_window",
+            "get_ui_tree",
+        }
 
     @property
     def available_skills(self) -> list[str]:

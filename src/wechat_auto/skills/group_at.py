@@ -75,7 +75,7 @@ class GroupAtSkill(BaseSkill):
         KeyboardHelper.paste(self.window)
         time.sleep(self._config.search_timeout)
 
-        # Step 3: Click the first matching member in the popup
+        # Step 3: Require one exact member match in the popup
         self._select_member_from_popup(mention)
 
         # Step 4: Type the message content
@@ -127,24 +127,17 @@ class GroupAtSkill(BaseSkill):
         Args:
             member_name: Name of the member to select (used for logging).
 
-        Note:
-            The popup appears as a List/ListItem control after typing '@'.
-            We click the first result, which should be the best match.
+        The popup appears as a List/ListItem control after typing '@'.  Result
+        order is not safe to use for an identity-bearing action.
         """
         try:
-            items = self._finder.find_all_children(self.window, control_type="ListItem")
-            if items:
-                self._finder.click(items[0])
+            if self._finder.click_unique_exact_list_item(self.window, member_name):
                 time.sleep(self._config.click_delay)
                 logger.debug("Selected member '%s' from popup.", member_name)
                 return
-        except Exception:
-            pass
-
-        # Fallback: press Enter to select the first result
-        try:
-            KeyboardHelper.press_enter(self.window)
-            time.sleep(self._config.click_delay)
-            logger.debug("Selected member via Enter key.")
         except Exception as exc:
-            logger.warning("Could not select member from popup: %s", exc)
+            raise SendMessageError(
+                f"Cannot select an unambiguous @ member: {member_name}"
+            ) from exc
+
+        raise SendMessageError(f"Cannot select an unambiguous @ member: {member_name}")

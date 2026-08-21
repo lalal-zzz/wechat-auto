@@ -65,6 +65,18 @@ class TestSkillRouter:
         with pytest.raises(SkillExecutionError, match="Both Tier 1 and Tier 2 failed"):
             router.route("click", {"component_id": "btn"})
 
+    def test_send_failure_does_not_degrade_to_atomic_tools(self):
+        router = SkillRouter()
+        handler = MagicMock(side_effect=RuntimeError("exact recipient not found"))
+        router.register_skill("send_text_message", handler)
+        mock_tools = MagicMock()
+        router.set_atomic_tools(mock_tools)
+
+        with pytest.raises(SkillExecutionError, match="Tier 1 skill 'send_text_message' failed"):
+            router.route("send_text_message", {"contact": "文件传输助手", "message": "test"})
+
+        mock_tools.click.assert_not_called()
+
     def test_route_atomic_direct(self):
         """Test routing directly to atomic tools when no tier1 match."""
         router = SkillRouter()

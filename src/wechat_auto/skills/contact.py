@@ -89,13 +89,10 @@ class ContactSkill(BaseSkill):
         KeyboardHelper.paste(self.window)
         time.sleep(self._config.search_timeout)
 
-        # Click the first matching result
-        items = self._finder.find_all_children(self.window, control_type="ListItem")
-        if items:
-            self._finder.click(items[0])
-            time.sleep(self._config.action_delay)
-        else:
+        if not self._finder.click_unique_exact_list_item(self.window, contact_name):
+            KeyboardHelper.press_escape(self.window)
             raise ContactNotFoundError(contact_name)
+        time.sleep(self._config.action_delay)
 
         # Clear search state with Esc
         KeyboardHelper.press_escape(self.window)
@@ -126,9 +123,7 @@ class ContactSkill(BaseSkill):
         time.sleep(self._config.search_timeout)
 
         try:
-            items = self._finder.find_all_children(self.window, control_type="ListItem")
-            if items:
-                self._finder.click(items[0])
+            if self._finder.click_unique_exact_list_item(self.window, contact_name):
                 time.sleep(self._config.action_delay)
                 info = self._read_contact_detail()
                 KeyboardHelper.press_escape(self.window)

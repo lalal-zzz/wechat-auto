@@ -19,6 +19,12 @@ class WeChatNotFoundError(WeChatAutoError):
     pass
 
 
+class WeChatNotReadyError(WeChatAutoError):
+    """Raised when a WeChat modal dialog prevents automation."""
+
+    pass
+
+
 class ChatNotFoundError(WeChatAutoError):
     """Raised when the specified chat conversation cannot be found."""
 

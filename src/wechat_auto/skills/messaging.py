@@ -128,64 +128,27 @@ class MessagingSkill(BaseSkill):
     # ------------------------------------------------------------------
 
     def _open_chat(self, chat_name: str) -> None:
-        """Open chat via contacts tab (not global search).
-
-        Per the design principle: contacts must be searched using
-        the contacts-tab dedicated search box, NOT the global search
-        (Ctrl+F), to avoid confusing contacts with official accounts.
-
-        Falls back to global search if the contact is not found in
-        the contacts tab (e.g. system contacts like 文件传输助手).
-        """
-        logger.info("Opening chat via contacts tab: %s", chat_name)
-
-        try:
-            # Navigate to contacts tab
-            self._finder.navigate_to_contacts()
-            time.sleep(self._config.action_delay)
-
-            # Open the contacts-tab search box
-            self._finder.open_search()
-            time.sleep(self._config.action_delay)
-
-            # Paste the contact name
-            ClipboardHelper.set_text(chat_name)
-            KeyboardHelper.paste(self.window)
-            time.sleep(self._config.search_timeout)
-
-            # Click the first matching result
-            items = self._finder.find_all_children(self.window, control_type="ListItem")
-            if items:
-                self._finder.click(items[0])
-                time.sleep(self._config.action_delay)
-                KeyboardHelper.press_escape(self.window)
-                time.sleep(self._config.action_delay)
-                logger.info("Opened chat via contacts: %s", chat_name)
-                return
-
-            # No results in contacts tab, fall back to global search
-            logger.info("Contact '%s' not in contacts tab, trying global search.", chat_name)
-            KeyboardHelper.press_escape(self.window)
-            time.sleep(self._config.action_delay)
-        except Exception as exc:
-            logger.debug("Contacts tab search failed: %s, falling back to global.", exc)
-
-        # Fallback: use global search (Ctrl+F)
+        """Open chat via search."""
+        logger.info("Opening chat: %s", chat_name)
         self._finder.open_chat(chat_name)
 
     def _find_message_box(self):
         """Locate the message input edit box in the current chat."""
         try:
+            children = self._finder.find_all_children(self.window, control_type="Edit")
+            if children:
+                # Usually the message input box is the last Edit control
+                return children[-1]
+        except Exception:
+            pass
+
+        try:
             return self._finder.find_child_by_title(
-                self.window, "", control_type="Edit", timeout=self._config.find_element_timeout
+                self.window, "", control_type="Edit", timeout=1.0
             )
         except Exception:
-            try:
-                children = self._finder.find_all_children(self.window, control_type="Edit")
-                if children:
-                    return children[-1]
-            except Exception:
-                pass
+            pass
+
         return None
 
     def _send_current(self) -> None:
@@ -193,14 +156,13 @@ class MessagingSkill(BaseSkill):
         KeyboardHelper.press_enter(self.window)
 
     def _click_input_area(self) -> None:
-        """Click the expected message input area for new WeChat (Weixin)."""
+        """Click the bottom-right message input area."""
         try:
             rect = self.window.rectangle()
-            x = rect.left + int((rect.right - rect.left) * 0.65)
-            y = rect.top + int((rect.bottom - rect.top) * 0.85)
-            logger.debug("Clicking input area at (%d, %d)", x, y)
+            # Calculate coordinates for the input region (lower right quadrant)
+            x = rect.left + int((rect.right - rect.left) * 0.6)
+            y = rect.top + int((rect.bottom - rect.top) * 0.8)
+            logger.debug("Focusing input area at (%d, %d)", x, y)
             self.window.click_input(coords=(x, y))
         except Exception as exc:
-            raise SendMessageError(
-                "Cannot locate message input area in new WeChat UI."
-            ) from exc
+            logger.debug("Click input area failed: %s", exc)

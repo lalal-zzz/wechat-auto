@@ -7,7 +7,7 @@ import time
 from typing import Optional, TYPE_CHECKING
 
 from wechat_auto.config import WeChatConfig
-from wechat_auto.exceptions import ElementNotFoundError, OperationTimeoutError
+from wechat_auto.exceptions import ChatNotFoundError, ElementNotFoundError, OperationTimeoutError
 
 if TYPE_CHECKING:
     from wechat_auto.core.application import Application
@@ -162,6 +162,40 @@ class ElementFinder:
             element.set_edit_text("")
         element.type_keys(text, pause=self._config.type_delay)
 
+    def click_unique_exact_list_item(self, parent, expected_name: str) -> bool:
+        """Click a result only when exactly one item names the requested target.
+
+        Search result ordering is not an identity guarantee.  In particular,
+        Weixin can put recent conversations, public accounts, and fuzzy matches
+        before an exact result.  This method deliberately refuses both zero and
+        ambiguous matches so callers cannot act on the wrong conversation.
+        """
+        matches = []
+        for item in self.find_all_children(parent, control_type="ListItem"):
+            texts = []
+            try:
+                texts.append(item.window_text().strip())
+            except Exception:
+                pass
+            for child in self.find_all_children(item, control_type="Text"):
+                try:
+                    texts.append(child.window_text().strip())
+                except Exception:
+                    pass
+            if expected_name in texts:
+                matches.append(item)
+
+        if len(matches) != 1:
+            logger.warning(
+                "Refusing to select %r: expected one exact ListItem match, found %d.",
+                expected_name,
+                len(matches),
+            )
+            return False
+
+        self.click(matches[0])
+        return True
+
     # ------------------------------------------------------------------
     # Navigation helpers
     # ------------------------------------------------------------------
@@ -196,84 +230,37 @@ class ElementFinder:
         time.sleep(self._config.action_delay)
 
     def open_chat(self, chat_name: str) -> None:
-        """Open a specific chat by name using search (Ctrl+F + paste + click result).
-
-        In the new WeChat (Weixin), pressing Enter in the search box opens
-        "搜一搜" (WeChat Search) instead of selecting the first chat result.
-        Therefore we click the first result in the search dropdown.
+        """Open a specific chat by name using search (Ctrl+F + paste + select result).
 
         Strategy:
-            1. Try to find and click a ListItem matching the name
-            2. Fall back to coordinate-based click if no ListItem found
+            1. Focus search box (Ctrl+F), clear existing content.
+            2. Paste chat name via clipboard.
+            3. Select one exact matching ListItem.
+
+        For safety, a fuzzy match, no match, or more than one exact match is
+        treated as a failed lookup.  The method never selects the first result.
         """
         from wechat_auto.utils.clipboard import ClipboardHelper
         from wechat_auto.utils.keyboard import KeyboardHelper
 
         win = self._app.main_window
 
-        # Step 1: Open search with Ctrl+F
+        # Step 1: Open search with Ctrl+F and clear old text
         self.open_search()
         time.sleep(self._config.action_delay)
+        win.type_keys("^a{BACKSPACE}")
+        time.sleep(0.1)
 
-        # Step 2: Paste chat name via clipboard (supports CJK characters)
+        # Step 2: Paste chat name via clipboard
         ClipboardHelper.set_text(chat_name)
         KeyboardHelper.paste(win)
-        time.sleep(self._config.search_timeout)
+        time.sleep(max(1.0, self._config.search_timeout / 2))
 
-        # Step 3: Click the first search result
-        # Strategy 1: Try to find ListItem elements and click the first match
-        clicked = self._click_search_result_by_listitem(win, chat_name)
-        if not clicked:
-            # Strategy 2: Fall back to coordinate-based click
-            self._click_first_search_result(win)
+        # Step 3: Never use result ordering as identity.
+        if not self.click_unique_exact_list_item(win, chat_name):
+            KeyboardHelper.press_escape(win)
+            raise ChatNotFoundError(chat_name)
+
         time.sleep(self._config.action_delay)
         logger.info("Opened chat: %s", chat_name)
 
-    def _click_search_result_by_listitem(self, win, chat_name: str) -> bool:
-        """Try to click a search result by finding ListItem controls.
-
-        Returns:
-            True if a result was found and clicked, False otherwise.
-        """
-        try:
-            items = self.find_all_children(win, control_type="ListItem")
-            if not items:
-                return False
-
-            # Try to find a matching item first
-            for item in items:
-                try:
-                    text = item.window_text()
-                    if chat_name in text or text in chat_name:
-                        self.click(item)
-                        logger.debug("Clicked search result ListItem: %s", text)
-                        return True
-                except Exception:
-                    continue
-
-            # No exact match, click the first result
-            self.click(items[0])
-            logger.debug("Clicked first search result ListItem (no exact match).")
-            return True
-        except Exception as exc:
-            logger.debug("ListItem search click failed: %s", exc)
-            return False
-
-    def _click_first_search_result(self, win) -> None:
-        """Click the first chat result in the search dropdown by coordinate.
-
-        Fallback when ListItem-based click fails.
-        """
-        import ctypes
-        user32 = ctypes.windll.user32
-
-        rect = win.rectangle()
-        # Search results appear in the left panel, below the search bar
-        x = rect.left + int((rect.right - rect.left) * 0.15)
-        y = rect.top + int((rect.bottom - rect.top) * 0.18)
-        logger.debug("Clicking first search result at (%d, %d)", x, y)
-        user32.SetCursorPos(x, y)
-        time.sleep(0.05)
-        user32.mouse_event(0x0002, 0, 0, 0, 0)  # LEFTDOWN
-        time.sleep(0.03)
-        user32.mouse_event(0x0004, 0, 0, 0, 0)  # LEFTUP

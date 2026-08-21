@@ -44,7 +44,7 @@ def main():
         agent.application, agent.finder, config, session, agent.healer
     )
     try:
-        messages = skill.get_messages(contact, count=count)
+        messages = skill.get_messages(contact, max_messages=count)
 
         if not messages:
             print("未获取到聊天记录。")

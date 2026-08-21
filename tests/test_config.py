@@ -8,7 +8,8 @@ class TestWeChatConfig:
         cfg = WeChatConfig()
         assert cfg.wechat_class_name == "Qt51514QWindowIcon"
         assert cfg.wechat_title == "微信"
-        assert cfg.backend == "win32"
+        assert cfg.backend == "uia"  # uia required for WeChat Qt5/DirectUI
+        assert cfg.auto_start is False
         assert cfg.default_timeout == 10.0
         assert cfg.max_retries == 3
 
