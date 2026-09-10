@@ -1,0 +1,1 @@
+wechatauto-replica @ git+https://github.com/fanyuantaier/wechatauto-replica.git@798989c9b61066c120b59ceba636b557b776ff7f

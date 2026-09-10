@@ -1,9 +1,10 @@
 """wechat-auto — Dual-layer closed-loop AI Agent system for WeChat desktop.
 
 Architecture:
-    - Engine (Brain): Closed-loop orchestration (Perceive → Decide → Execute → Reset)
-    - Skills (Tier 1): High-level composite skill packages (90% scenarios)
-    - Atomic (Tier 2): Native UIA atomic tools (10% fallback)
+    - Read plane: local encrypted DB -> private offline SQLite
+    - Action plane: one BasicSkill; every UI mutation uses HWND messages
+    - Observation plane: OCR verifies HWND outcomes and supplies fallback coordinates
+    - Composite skills: optional future orchestration, disabled by default
 
 Quick start::
 
@@ -13,58 +14,40 @@ Quick start::
     agent.connect()
     agent.run(poll_interval=5.0)  # continuous closed-loop
 
-Or use atomic tools directly::
+Or dispatch a primitive HWND action::
 
     from wechat_auto import AgentLoop
 
     agent = AgentLoop()
     agent.connect()
-    # Access Tier 2 tools via router
+    agent.router.route("basic_action", {"action": "open_chat", "contact": "文件传输助手"})
 """
 
-__version__ = "0.2.0"
+__version__ = "0.4.0"
 
 from wechat_auto.engine.loop import AgentLoop
-from wechat_auto.atomic.tools import AtomicUITools
 from wechat_auto.config import WeChatConfig, SessionConfig
+from wechat_auto.skills.basic import BasicSkill, BasicLayout
+from wechat_auto.skills.composite import CompositeSkill
 from wechat_auto.exceptions import (
     WeChatAutoError,
     WeChatNotRunningError,
-    WeChatNotFoundError,
-    WeChatNotReadyError,
     ChatNotFoundError,
-    ContactNotFoundError,
-    SendMessageError,
-    ElementNotFoundError,
-    OperationTimeoutError,
-    MomentsError,
-    EmojiNotFoundError,
     SkillExecutionError,
-    AtomicToolError,
-    EnvironmentResetError,
 )
 
 __all__ = [
     # Main entry point
     "AgentLoop",
-    # Tier 2 atomic tools
-    "AtomicUITools",
     # Config
     "WeChatConfig",
     "SessionConfig",
+    "BasicSkill",
+    "BasicLayout",
+    "CompositeSkill",
     # Exceptions
     "WeChatAutoError",
     "WeChatNotRunningError",
-    "WeChatNotFoundError",
-    "WeChatNotReadyError",
     "ChatNotFoundError",
-    "ContactNotFoundError",
-    "SendMessageError",
-    "ElementNotFoundError",
-    "OperationTimeoutError",
-    "MomentsError",
-    "EmojiNotFoundError",
     "SkillExecutionError",
-    "AtomicToolError",
-    "EnvironmentResetError",
 ]

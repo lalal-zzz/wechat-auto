@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -25,7 +25,6 @@ def session():
 def mock_app():
     """Return a mocked Application instance."""
     app = MagicMock()
-    app.main_window = MagicMock()
     app.config = WeChatConfig()
     app.is_connected.return_value = True
     return app
@@ -33,9 +32,5 @@ def mock_app():
 
 @pytest.fixture
 def mock_finder():
-    """Return a mocked ElementFinder instance."""
-    finder = MagicMock()
-    finder.find_child_by_title.return_value = MagicMock()
-    finder.find_all_children.return_value = []
-    finder.exists.return_value = True
-    return finder
+    """Compatibility fixture for tests whose call shape predates BaseSkill cleanup."""
+    return MagicMock()

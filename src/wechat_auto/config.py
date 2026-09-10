@@ -13,14 +13,12 @@ class WeChatConfig:
     # Window identification
     wechat_class_name: str = "Qt51514QWindowIcon"
     wechat_title: str = "微信"
-    wechat_class_name_legacy: str = "WeChatMainWndForPC"
     wechat_process_name: str = "Weixin"
     # This library attaches to an already-running, logged-in client.  Starting
     # Weixin from an automation process can create a second client/session.
     auto_start: bool = False
     executable_path: Optional[str] = None
     launch_wait_timeout: float = 15.0
-    login_class_name: str = "WeChatLoginWndForPC"
 
     # Timeouts (in seconds)
     default_timeout: float = 10.0
@@ -72,8 +70,11 @@ class WeChatConfig:
     kw_delete_msg: str = "删除"
     kw_reply: str = "回复"
 
-    # Backend: 'uia' is required for WeChat Qt5 and DirectUI control trees
-    backend: str = "uia"
+    keyboard_search_mode: str = "click"  # 'click' or 'shortcut'
+    keyboard_input_mode: str = "wmchar"  # 'winmsg' or 'wmchar'
+    # Weixin 4.x action invariant: HWND executes, OCR observes/falls back.
+    action_driver: str = "hwnd"
+    ocr_fallback_enabled: bool = True
 
     # Optional log level
     log_level: str = "INFO"

@@ -1,3 +1,0 @@
-wechat-auto end-to-end test payload
-target: 文件传输助手
-purpose: verify file upload and send flow

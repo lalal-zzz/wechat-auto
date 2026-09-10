@@ -30,34 +30,39 @@ class ClipboardHelper:
 
         Uses PIL/Pillow to load the image and win32clipboard to set it.
         """
+        import io
+        import win32clipboard
+        from PIL import Image
+
+        with Image.open(image_path) as image, io.BytesIO() as output:
+            image.convert("RGB").save(output, "BMP")
+            data = output.getvalue()[14:]
+        ClipboardHelper._set_data(win32clipboard.CF_DIB, data)
+
+    @staticmethod
+    def _set_data(format_id: int, data: bytes) -> None:
+        import win32clipboard
+
+        win32clipboard.OpenClipboard()
         try:
-            import io
-            import ctypes
-            import ctypes.wintypes
-            from PIL import Image
+            win32clipboard.EmptyClipboard()
+            win32clipboard.SetClipboardData(format_id, data)
+        finally:
+            win32clipboard.CloseClipboard()
 
-            img = Image.open(image_path).convert("DIB")
-            output = io.BytesIO()
-            img.save(output, "BMP")
-            data = output.getvalue()[14:]  # skip BMP file header (14 bytes)
-            output.close()
+    @staticmethod
+    def set_files(paths: list[str]) -> None:
+        """Set CF_HDROP with a Unicode DROPFILES payload (never path text)."""
+        import struct
+        from pathlib import Path
+        import win32clipboard
 
-            CF_DIB = 8
-            kernel32 = ctypes.windll.kernel32
-            user32 = ctypes.windll.user32
-
-            user32.OpenClipboard(0)
-            user32.EmptyClipboard()
-            hMem = kernel32.GlobalAlloc(0x0042, len(data))  # GMEM_MOVEABLE | GMEM_ZEROINIT
-            pMem = kernel32.GlobalLock(hMem)
-            ctypes.cdll.msvcrt.memcpy_s(ctypes.c_void_p(pMem), len(data), data, len(data))
-            kernel32.GlobalUnlock(hMem)
-            user32.SetClipboardData(CF_DIB, hMem)
-            user32.CloseClipboard()
-            logger.debug("Image copied to clipboard: %s", image_path)
-        except Exception as exc:
-            logger.error("Failed to set image to clipboard: %s", exc)
-            raise
+        resolved = [Path(path).resolve(strict=True) for path in paths]
+        if not resolved or any(not path.is_file() for path in resolved):
+            raise ValueError("Expected one or more existing files")
+        header = struct.pack("<IiiII", 20, 0, 0, 0, 1)
+        names = ("\0".join(str(path) for path in resolved) + "\0\0").encode("utf-16le")
+        ClipboardHelper._set_data(win32clipboard.CF_HDROP, header + names)
 
     @staticmethod
     def clear() -> None:
