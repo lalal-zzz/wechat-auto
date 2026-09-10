@@ -27,8 +27,8 @@ __version__ = "0.4.0"
 
 from wechat_auto.engine.loop import AgentLoop
 from wechat_auto.config import WeChatConfig, SessionConfig
-from wechat_auto.skills.basic import BasicSkill, BasicLayout
-from wechat_auto.skills.composite import CompositeSkill
+from wechat_auto.actions.basic import BasicSkill, BasicLayout
+from wechat_auto.actions.composite import CompositeSkill
 from wechat_auto.exceptions import (
     WeChatAutoError,
     WeChatNotRunningError,

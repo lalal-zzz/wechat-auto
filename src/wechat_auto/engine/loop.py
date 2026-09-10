@@ -8,7 +8,7 @@ from typing import Optional
 from wechat_auto.config import SessionConfig, WeChatConfig
 from wechat_auto.core.application import Application
 from wechat_auto.engine.router import SkillRouter
-from wechat_auto.skills.basic import BasicSkill
+from wechat_auto.actions.basic import BasicSkill
 
 logger = logging.getLogger(__name__)
 

@@ -17,7 +17,7 @@ package.
 src/                         Python implementation
   wechat_auto/
     core/                    Win32 HWND connection
-    skills/basic.py          only UI action entrypoint
+    actions/basic.py         only UI action entrypoint
     primitives/              HWND actions and OCR observation
     backends/                read-only WeChat database adapters
     storage/                 offline SQLite, memory and preference stores
@@ -33,7 +33,7 @@ Use this sequence for repository tasks:
 1. Read local memory and database data through the adapters in `src/wechat_auto/backends/`.
 2. Persist normalized data, cursors, semantic hints and analysis inputs through `src/wechat_auto/storage/`.
 3. Let the LLM analyze context, contacts, relationships, preferences, events and reply candidates.
-4. For a UI mutation, call the single `BasicSkill` entrypoint in `src/wechat_auto/skills/basic.py`.
+4. For a UI mutation, call the single `BasicSkill` entrypoint in `src/wechat_auto/actions/basic.py`.
 5. Treat OCR as observation and verification only. OCR may return a replacement coordinate; the actual action must still be sent through the top-level HWND driver.
 6. Require explicit confirmation before sending messages or stickers, liking/commenting Moments, or downloading remote media.
 

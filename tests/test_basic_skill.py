@@ -2,7 +2,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from wechat_auto.skills.basic import BasicSkill
+from wechat_auto.actions.basic import BasicSkill
 
 
 def _skill(mock_app, mock_finder, config, session):
@@ -57,7 +57,7 @@ def test_prepare_file_pastes_through_hwnd(mock_app, mock_finder, config, session
     payload = tmp_path / "payload.bin"
     payload.write_bytes(b"test")
     from unittest.mock import patch
-    with patch("wechat_auto.skills.basic.ClipboardHelper.set_files") as set_files:
+    with patch("wechat_auto.actions.basic.ClipboardHelper.set_files") as set_files:
         result = skill.prepare_file("target", str(payload))
     assert result["sent"] is False
     set_files.assert_called_once_with([str(payload.resolve())])

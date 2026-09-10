@@ -5,12 +5,12 @@
 ## 架构
 
 - `core/application.py`：纯 Win32 查找、激活和管理顶层 HWND。
-- `skills/basic.py`：唯一 UI 动作入口。
+- `actions/basic.py`：唯一 UI 动作入口。
 - `primitives/keyboard_only.py`：通过 `WM_*` 消息执行点击、右键、滚轮、按键和输入。
 - `primitives/vision.py`：只截图、OCR、识别和返回替代坐标，不执行动作。
 - `backends/`：只读微信本地数据库。
 - `storage/`：项目自己的离线 SQLite、表情语义和偏好目录。
-- `skills/composite.py`：未来高级流程接口，暂不提供具体自动回复实现。
+- `actions/composite.py`：未来高级流程接口，暂不提供具体自动回复实现。
 
 ## 硬性规则
 
