@@ -6,7 +6,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from wechat_auto.config import WeChatConfig, SessionConfig
+from wechat_auto.config import SessionConfig, WeChatConfig
 
 
 @pytest.fixture

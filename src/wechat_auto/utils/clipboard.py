@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-from typing import Optional
 
 import pyperclip
 
@@ -31,6 +30,7 @@ class ClipboardHelper:
         Uses PIL/Pillow to load the image and win32clipboard to set it.
         """
         import io
+
         import win32clipboard
         from PIL import Image
 
@@ -55,6 +55,7 @@ class ClipboardHelper:
         """Set CF_HDROP with a Unicode DROPFILES payload (never path text)."""
         import struct
         from pathlib import Path
+
         import win32clipboard
 
         resolved = [Path(path).resolve(strict=True) for path in paths]

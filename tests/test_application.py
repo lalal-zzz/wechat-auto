@@ -58,6 +58,24 @@ def test_discovers_exact_weixin_4_window():
         assert Application()._find_wechat_main_hwnd() == 123
 
 
+def test_discovers_weixin_when_title_is_active_chat_name():
+    windows = _main()
+    windows[123]["title"] = "阿里嘎多"
+    api = FakeUser32(windows)
+    with patch("wechat_auto.core.application.user32", api), \
+         patch("wechat_auto.core.application.WNDENUMPROC", side_effect=lambda fn: fn):
+        assert Application()._find_wechat_main_hwnd() == 123
+
+
+def test_discovers_minimized_weixin_with_active_chat_title():
+    windows = _main(visible=True, iconic=True)
+    windows[123]["title"] = "阿里嘎多"
+    api = FakeUser32(windows)
+    with patch("wechat_auto.core.application.user32", api), \
+         patch("wechat_auto.core.application.WNDENUMPROC", side_effect=lambda fn: fn):
+        assert Application()._find_wechat_main_hwnd() == 123
+
+
 def test_connect_restores_hidden_window_without_uia():
     api = FakeUser32(_main())
     with patch("wechat_auto.core.application.user32", api), \
@@ -71,10 +89,12 @@ def test_connect_restores_hidden_window_without_uia():
 def test_connect_rejects_other_windows():
     api = FakeUser32({7: {"title": "微信", "cls": "Other", "visible": True,
                           "iconic": False, "rect": (0, 0, 500, 500)}})
-    with patch("wechat_auto.core.application.user32", api), \
-         patch("wechat_auto.core.application.WNDENUMPROC", side_effect=lambda fn: fn):
-        with pytest.raises(WeChatNotRunningError):
-            Application().connect()
+    with (
+        patch("wechat_auto.core.application.user32", api),
+        patch("wechat_auto.core.application.WNDENUMPROC", side_effect=lambda fn: fn),
+        pytest.raises(WeChatNotRunningError),
+    ):
+        Application().connect()
 
 
 def test_visible_window_is_not_woken_by_observation_loop():
@@ -83,3 +103,12 @@ def test_visible_window_is_not_woken_by_observation_loop():
     with patch("wechat_auto.core.application.user32", api):
         assert app.ensure_interactable() is False
     assert api.shown == []
+
+
+def test_auxiliary_binding_keeps_main_and_rejects_foreign_process():
+    app = Application(); app._hwnd = 123
+    with patch.object(Application, 'window_process_id', side_effect=lambda h: 5 if h in {123, 456} else 6):
+        child = app.for_window(456)
+        assert child.handle == 456 and app.handle == 123
+        with pytest.raises(PermissionError, match='connected Weixin process'):
+            app.for_window(999)

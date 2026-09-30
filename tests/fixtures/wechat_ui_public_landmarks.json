@@ -1,0 +1,2065 @@
+{
+  "source": "Actual PaddleOCR observations; private text, images and HWNDs removed. Windows Weixin 4.1.15.9, dark theme, 144 DPI.",
+  "samples": [
+    {
+      "name": "contacts",
+      "size": [
+        1686,
+        1135
+      ],
+      "boxes": [
+        {
+          "text": "搜索",
+          "x": 155,
+          "y": 70,
+          "w": 45,
+          "h": 27,
+          "score": 0.9829196929931641,
+          "engine": "paddleocr",
+          "region": null,
+          "window_fraction": [
+            0.09193357058125741,
+            0.06167400881057269,
+            0.026690391459074734,
+            0.02378854625550661
+          ]
+        },
+        {
+          "text": "通讯录管理",
+          "x": 250,
+          "y": 135,
+          "w": 110,
+          "h": 25,
+          "score": 0.9995638132095337,
+          "engine": "paddleocr",
+          "region": null,
+          "window_fraction": [
+            0.14827995255041518,
+            0.11894273127753303,
+            0.06524317912218268,
+            0.022026431718061675
+          ]
+        },
+        {
+          "text": "新的朋友",
+          "x": 151,
+          "y": 213,
+          "w": 90,
+          "h": 24,
+          "score": 0.9997776746749878,
+          "engine": "paddleocr",
+          "region": null,
+          "window_fraction": [
+            0.08956109134045077,
+            0.18766519823788547,
+            0.05338078291814947,
+            0.021145374449339206
+          ]
+        },
+        {
+          "text": "联系人",
+          "x": 147,
+          "y": 371,
+          "w": 74,
+          "h": 32,
+          "score": 0.9905600547790527,
+          "engine": "paddleocr",
+          "region": null,
+          "window_fraction": [
+            0.08718861209964412,
+            0.32687224669603526,
+            0.04389086595492289,
+            0.028193832599118944
+          ]
+        }
+      ],
+      "geometry": {
+        "theme": "dark",
+        "median_luminance": 30.0,
+        "selected_list_rows": [],
+        "vertical_separators": [
+          {
+            "x": 100,
+            "fraction": 0.0593,
+            "coverage": 1.0
+          },
+          {
+            "x": 469,
+            "fraction": 0.2782,
+            "coverage": 1.0
+          }
+        ],
+        "composer_candidates": [],
+        "right_panel_candidate": null,
+        "method": "local_contrast_geometry"
+      },
+      "expected_page": "contacts",
+      "expected_overlays": [],
+      "expected_panels": [],
+      "expected_content_windows": []
+    },
+    {
+      "name": "self_profile",
+      "size": [
+        1686,
+        1135
+      ],
+      "boxes": [
+        {
+          "text": "搜索",
+          "x": 155,
+          "y": 70,
+          "w": 45,
+          "h": 27,
+          "score": 0.9829196929931641,
+          "engine": "paddleocr",
+          "region": null,
+          "window_fraction": [
+            0.09193357058125741,
+            0.06167400881057269,
+            0.026690391459074734,
+            0.02378854625550661
+          ]
+        },
+        {
+          "text": "通讯录管理",
+          "x": 250,
+          "y": 135,
+          "w": 110,
+          "h": 25,
+          "score": 0.9995638132095337,
+          "engine": "paddleocr",
+          "region": null,
+          "window_fraction": [
+            0.14827995255041518,
+            0.11894273127753303,
+            0.06524317912218268,
+            0.022026431718061675
+          ]
+        },
+        {
+          "text": "微信号",
+          "x": 948,
+          "y": 181,
+          "w": 241,
+          "h": 22,
+          "score": 0.9970827102661133,
+          "engine": "paddleocr",
+          "region": null,
+          "window_fraction": [
+            0.5622775800711743,
+            0.15947136563876652,
+            0.14294187425860025,
+            0.019383259911894272
+          ]
+        },
+        {
+          "text": "新的朋友",
+          "x": 151,
+          "y": 213,
+          "w": 90,
+          "h": 24,
+          "score": 0.9997776746749878,
+          "engine": "paddleocr",
+          "region": null,
+          "window_fraction": [
+            0.08956109134045077,
+            0.18766519823788547,
+            0.05338078291814947,
+            0.021145374449339206
+          ]
+        },
+        {
+          "text": "朋友圈",
+          "x": 832,
+          "y": 273,
+          "w": 69,
+          "h": 29,
+          "score": 0.9581047892570496,
+          "engine": "paddleocr",
+          "region": null,
+          "window_fraction": [
+            0.49347568208778175,
+            0.24052863436123348,
+            0.04092526690391459,
+            0.02555066079295154
+          ]
+        },
+        {
+          "text": "联系人",
+          "x": 149,
+          "y": 374,
+          "w": 71,
+          "h": 26,
+          "score": 0.9873115420341492,
+          "engine": "paddleocr",
+          "region": null,
+          "window_fraction": [
+            0.08837485172004746,
+            0.3295154185022026,
+            0.042111506524317915,
+            0.02290748898678414
+          ]
+        },
+        {
+          "text": "发消息",
+          "x": 1041,
+          "y": 446,
+          "w": 57,
+          "h": 22,
+          "score": 0.9998431205749512,
+          "engine": "paddleocr",
+          "region": null,
+          "window_fraction": [
+            0.6174377224199288,
+            0.39295154185022024,
+            0.033807829181494664,
+            0.019383259911894272
+          ]
+        }
+      ],
+      "geometry": {
+        "theme": "dark",
+        "median_luminance": 30.0,
+        "selected_list_rows": [
+          {
+            "x": 101,
+            "y": 468,
+            "w": 369,
+            "h": 81
+          }
+        ],
+        "vertical_separators": [
+          {
+            "x": 100,
+            "fraction": 0.0593,
+            "coverage": 1.0
+          },
+          {
+            "x": 469,
+            "fraction": 0.2782,
+            "coverage": 1.0
+          }
+        ],
+        "composer_candidates": [],
+        "right_panel_candidate": null,
+        "method": "local_contrast_geometry"
+      },
+      "expected_page": "contact_profile",
+      "expected_overlays": [],
+      "expected_panels": [],
+      "expected_content_windows": []
+    },
+    {
+      "name": "contact_profile",
+      "size": [
+        1686,
+        1135
+      ],
+      "boxes": [
+        {
+          "text": "搜索",
+          "x": 154,
+          "y": 70,
+          "w": 46,
+          "h": 27,
+          "score": 0.960252046585083,
+          "engine": "paddleocr",
+          "region": null,
+          "window_fraction": [
+            0.09134045077105575,
+            0.06167400881057269,
+            0.027283511269276393,
+            0.02378854625550661
+          ]
+        },
+        {
+          "text": "通讯录管理",
+          "x": 250,
+          "y": 135,
+          "w": 110,
+          "h": 25,
+          "score": 0.9995638132095337,
+          "engine": "paddleocr",
+          "region": null,
+          "window_fraction": [
+            0.14827995255041518,
+            0.11894273127753303,
+            0.06524317912218268,
+            0.022026431718061675
+          ]
+        },
+        {
+          "text": "微信号",
+          "x": 946,
+          "y": 182,
+          "w": 214,
+          "h": 27,
+          "score": 0.9944915771484375,
+          "engine": "paddleocr",
+          "region": null,
+          "window_fraction": [
+            0.561091340450771,
+            0.160352422907489,
+            0.1269276393831554,
+            0.02378854625550661
+          ]
+        },
+        {
+          "text": "新的朋友",
+          "x": 151,
+          "y": 213,
+          "w": 90,
+          "h": 24,
+          "score": 0.9997776746749878,
+          "engine": "paddleocr",
+          "region": null,
+          "window_fraction": [
+            0.08956109134045077,
+            0.18766519823788547,
+            0.05338078291814947,
+            0.021145374449339206
+          ]
+        },
+        {
+          "text": "备注",
+          "x": 831,
+          "y": 325,
+          "w": 51,
+          "h": 32,
+          "score": 0.9900814294815063,
+          "engine": "paddleocr",
+          "region": null,
+          "window_fraction": [
+            0.4928825622775801,
+            0.28634361233480177,
+            0.030249110320284697,
+            0.028193832599118944
+          ]
+        },
+        {
+          "text": "联系人",
+          "x": 149,
+          "y": 374,
+          "w": 71,
+          "h": 26,
+          "score": 0.9873115420341492,
+          "engine": "paddleocr",
+          "region": null,
+          "window_fraction": [
+            0.08837485172004746,
+            0.3295154185022026,
+            0.042111506524317915,
+            0.02290748898678414
+          ]
+        },
+        {
+          "text": "朋友圈",
+          "x": 831,
+          "y": 397,
+          "w": 71,
+          "h": 32,
+          "score": 0.984728991985321,
+          "engine": "paddleocr",
+          "region": null,
+          "window_fraction": [
+            0.4928825622775801,
+            0.3497797356828194,
+            0.042111506524317915,
+            0.028193832599118944
+          ]
+        },
+        {
+          "text": "发消息",
+          "x": 911,
+          "y": 779,
+          "w": 57,
+          "h": 23,
+          "score": 0.9998804926872253,
+          "engine": "paddleocr",
+          "region": null,
+          "window_fraction": [
+            0.5403321470937129,
+            0.6863436123348018,
+            0.033807829181494664,
+            0.02026431718061674
+          ]
+        }
+      ],
+      "geometry": {
+        "theme": "dark",
+        "median_luminance": 30.0,
+        "selected_list_rows": [
+          {
+            "x": 101,
+            "y": 549,
+            "w": 369,
+            "h": 81
+          }
+        ],
+        "vertical_separators": [
+          {
+            "x": 100,
+            "fraction": 0.0593,
+            "coverage": 1.0
+          },
+          {
+            "x": 469,
+            "fraction": 0.2782,
+            "coverage": 1.0
+          }
+        ],
+        "composer_candidates": [],
+        "right_panel_candidate": null,
+        "method": "local_contrast_geometry"
+      },
+      "expected_page": "contact_profile",
+      "expected_overlays": [],
+      "expected_panels": [],
+      "expected_content_windows": []
+    },
+    {
+      "name": "contact_more",
+      "size": [
+        315,
+        432
+      ],
+      "boxes": [
+        {
+          "text": "设置备注和标签",
+          "x": 55,
+          "y": 56,
+          "w": 148,
+          "h": 23,
+          "score": 0.9982190728187561,
+          "engine": "paddleocr",
+          "region": null,
+          "window_fraction": [
+            0.1746031746031746,
+            0.12962962962962962,
+            0.46984126984126984,
+            0.05324074074074074
+          ]
+        },
+        {
+          "text": "设置朋友权限",
+          "x": 56,
+          "y": 106,
+          "w": 125,
+          "h": 20,
+          "score": 0.9938696026802063,
+          "engine": "paddleocr",
+          "region": null,
+          "window_fraction": [
+            0.17777777777777778,
+            0.24537037037037038,
+            0.3968253968253968,
+            0.046296296296296294
+          ]
+        },
+        {
+          "text": "把他推荐给朋友",
+          "x": 54,
+          "y": 166,
+          "w": 149,
+          "h": 25,
+          "score": 0.9991459846496582,
+          "engine": "paddleocr",
+          "region": null,
+          "window_fraction": [
+            0.17142857142857143,
+            0.38425925925925924,
+            0.473015873015873,
+            0.05787037037037037
+          ]
+        },
+        {
+          "text": "删除联系人",
+          "x": 54,
+          "y": 353,
+          "w": 106,
+          "h": 23,
+          "score": 0.9789619445800781,
+          "engine": "paddleocr",
+          "region": null,
+          "window_fraction": [
+            0.17142857142857143,
+            0.8171296296296297,
+            0.33650793650793653,
+            0.05324074074074074
+          ]
+        }
+      ],
+      "geometry": {
+        "theme": "dark",
+        "median_luminance": 36.0,
+        "selected_list_rows": [],
+        "vertical_separators": [
+          {
+            "x": 34,
+            "fraction": 0.1079,
+            "coverage": 1.0
+          },
+          {
+            "x": 277,
+            "fraction": 0.8794,
+            "coverage": 1.0
+          }
+        ],
+        "composer_candidates": [],
+        "right_panel_candidate": {
+          "x": 277,
+          "fraction": 0.8794,
+          "coverage": 1.0
+        },
+        "method": "local_contrast_geometry"
+      },
+      "expected_page": "unknown",
+      "expected_overlays": [
+        "contact_more"
+      ],
+      "expected_panels": [],
+      "expected_content_windows": []
+    },
+    {
+      "name": "contact_remark",
+      "size": [
+        612,
+        1029
+      ],
+      "boxes": [
+        {
+          "text": "设置备注和标签",
+          "x": 231,
+          "y": 51,
+          "w": 151,
+          "h": 28,
+          "score": 0.9992140531539917,
+          "engine": "paddleocr",
+          "region": null,
+          "window_fraction": [
+            0.37745098039215685,
+            0.04956268221574344,
+            0.24673202614379086,
+            0.027210884353741496
+          ]
+        },
+        {
+          "text": "标签",
+          "x": 84,
+          "y": 253,
+          "w": 48,
+          "h": 31,
+          "score": 0.9999175071716309,
+          "engine": "paddleocr",
+          "region": null,
+          "window_fraction": [
+            0.13725490196078433,
+            0.24586977648202138,
+            0.0784313725490196,
+            0.03012633624878523
+          ]
+        },
+        {
+          "text": "完成",
+          "x": 177,
+          "y": 918,
+          "w": 55,
+          "h": 32,
+          "score": 0.9999668598175049,
+          "engine": "paddleocr",
+          "region": null,
+          "window_fraction": [
+            0.28921568627450983,
+            0.892128279883382,
+            0.08986928104575163,
+            0.031098153547133137
+          ]
+        },
+        {
+          "text": "取消",
+          "x": 381,
+          "y": 919,
+          "w": 52,
+          "h": 32,
+          "score": 0.9998530149459839,
+          "engine": "paddleocr",
+          "region": null,
+          "window_fraction": [
+            0.6225490196078431,
+            0.8931000971817298,
+            0.08496732026143791,
+            0.031098153547133137
+          ]
+        }
+      ],
+      "geometry": {
+        "theme": "dark",
+        "median_luminance": 30.0,
+        "selected_list_rows": [],
+        "vertical_separators": [
+          {
+            "x": 34,
+            "fraction": 0.0556,
+            "coverage": 1.0
+          },
+          {
+            "x": 574,
+            "fraction": 0.9379,
+            "coverage": 1.0
+          }
+        ],
+        "composer_candidates": [],
+        "right_panel_candidate": null,
+        "method": "local_contrast_geometry"
+      },
+      "expected_page": "unknown",
+      "expected_overlays": [
+        "contact_remark"
+      ],
+      "expected_panels": [],
+      "expected_content_windows": []
+    },
+    {
+      "name": "contact_permissions",
+      "size": [
+        612,
+        732
+      ],
+      "boxes": [
+        {
+          "text": "朋友权限",
+          "x": 260,
+          "y": 51,
+          "w": 91,
+          "h": 29,
+          "score": 0.9993942975997925,
+          "engine": "paddleocr",
+          "region": null,
+          "window_fraction": [
+            0.42483660130718953,
+            0.06967213114754098,
+            0.14869281045751634,
+            0.03961748633879782
+          ]
+        },
+        {
+          "text": "朋友权限",
+          "x": 68,
+          "y": 117,
+          "w": 79,
+          "h": 25,
+          "score": 0.999581515789032,
+          "engine": "paddleocr",
+          "region": null,
+          "window_fraction": [
+            0.1111111111111111,
+            0.1598360655737705,
+            0.12908496732026145,
+            0.03415300546448088
+          ]
+        },
+        {
+          "text": "聊天、朋友圈、微信运动等",
+          "x": 106,
+          "y": 173,
+          "w": 254,
+          "h": 29,
+          "score": 0.9978050589561462,
+          "engine": "paddleocr",
+          "region": null,
+          "window_fraction": [
+            0.17320261437908496,
+            0.23633879781420766,
+            0.4150326797385621,
+            0.03961748633879782
+          ]
+        },
+        {
+          "text": "仅聊天",
+          "x": 103,
+          "y": 240,
+          "w": 71,
+          "h": 29,
+          "score": 0.9970887303352356,
+          "engine": "paddleocr",
+          "region": null,
+          "window_fraction": [
+            0.16830065359477125,
+            0.32786885245901637,
+            0.11601307189542484,
+            0.03961748633879782
+          ]
+        },
+        {
+          "text": "完成",
+          "x": 177,
+          "y": 622,
+          "w": 54,
+          "h": 30,
+          "score": 0.9999021291732788,
+          "engine": "paddleocr",
+          "region": null,
+          "window_fraction": [
+            0.28921568627450983,
+            0.8497267759562842,
+            0.08823529411764706,
+            0.040983606557377046
+          ]
+        },
+        {
+          "text": "取消",
+          "x": 382,
+          "y": 622,
+          "w": 50,
+          "h": 31,
+          "score": 0.9995906352996826,
+          "engine": "paddleocr",
+          "region": null,
+          "window_fraction": [
+            0.6241830065359477,
+            0.8497267759562842,
+            0.08169934640522876,
+            0.04234972677595628
+          ]
+        }
+      ],
+      "geometry": {
+        "theme": "dark",
+        "median_luminance": 30.0,
+        "selected_list_rows": [],
+        "vertical_separators": [
+          {
+            "x": 34,
+            "fraction": 0.0556,
+            "coverage": 1.0
+          },
+          {
+            "x": 574,
+            "fraction": 0.9379,
+            "coverage": 1.0
+          }
+        ],
+        "composer_candidates": [],
+        "right_panel_candidate": null,
+        "method": "local_contrast_geometry"
+      },
+      "expected_page": "unknown",
+      "expected_overlays": [
+        "contact_permissions"
+      ],
+      "expected_panels": [],
+      "expected_content_windows": []
+    },
+    {
+      "name": "discover",
+      "size": [
+        1686,
+        1135
+      ],
+      "boxes": [
+        {
+          "text": "发现",
+          "x": 121,
+          "y": 69,
+          "w": 49,
+          "h": 30,
+          "score": 0.999940812587738,
+          "engine": "paddleocr",
+          "region": null,
+          "window_fraction": [
+            0.07176749703440095,
+            0.06079295154185022,
+            0.029062870699881376,
+            0.02643171806167401
+          ]
+        },
+        {
+          "text": "朋友圈",
+          "x": 165,
+          "y": 143,
+          "w": 67,
+          "h": 26,
+          "score": 0.9561204314231873,
+          "engine": "paddleocr",
+          "region": null,
+          "window_fraction": [
+            0.09786476868327403,
+            0.12599118942731277,
+            0.039739027283511266,
+            0.02290748898678414
+          ]
+        },
+        {
+          "text": "视频号",
+          "x": 164,
+          "y": 216,
+          "w": 68,
+          "h": 25,
+          "score": 0.9999201893806458,
+          "engine": "paddleocr",
+          "region": null,
+          "window_fraction": [
+            0.09727164887307237,
+            0.19030837004405288,
+            0.04033214709371293,
+            0.022026431718061675
+          ]
+        },
+        {
+          "text": "小程序",
+          "x": 164,
+          "y": 431,
+          "w": 69,
+          "h": 26,
+          "score": 0.999920666217804,
+          "engine": "paddleocr",
+          "region": null,
+          "window_fraction": [
+            0.09727164887307237,
+            0.37973568281938325,
+            0.04092526690391459,
+            0.02290748898678414
+          ]
+        }
+      ],
+      "geometry": {
+        "theme": "dark",
+        "median_luminance": 30.0,
+        "selected_list_rows": [],
+        "vertical_separators": [
+          {
+            "x": 100,
+            "fraction": 0.0593,
+            "coverage": 1.0
+          },
+          {
+            "x": 469,
+            "fraction": 0.2782,
+            "coverage": 1.0
+          }
+        ],
+        "composer_candidates": [],
+        "right_panel_candidate": null,
+        "method": "local_contrast_geometry"
+      },
+      "expected_page": "discover",
+      "expected_overlays": [],
+      "expected_panels": [],
+      "expected_content_windows": []
+    },
+    {
+      "name": "moments_feed",
+      "size": [
+        1686,
+        1135
+      ],
+      "boxes": [
+        {
+          "text": "发现",
+          "x": 122,
+          "y": 71,
+          "w": 48,
+          "h": 26,
+          "score": 0.9999409914016724,
+          "engine": "paddleocr",
+          "region": null,
+          "window_fraction": [
+            0.07236061684460261,
+            0.06255506607929516,
+            0.028469750889679714,
+            0.02290748898678414
+          ]
+        },
+        {
+          "text": "朋友圈",
+          "x": 163,
+          "y": 143,
+          "w": 69,
+          "h": 26,
+          "score": 0.9658194184303284,
+          "engine": "paddleocr",
+          "region": null,
+          "window_fraction": [
+            0.0966785290628707,
+            0.12599118942731277,
+            0.04092526690391459,
+            0.02290748898678414
+          ]
+        },
+        {
+          "text": "视频号",
+          "x": 164,
+          "y": 215,
+          "w": 68,
+          "h": 26,
+          "score": 0.9999604225158691,
+          "engine": "paddleocr",
+          "region": null,
+          "window_fraction": [
+            0.09727164887307237,
+            0.1894273127753304,
+            0.04033214709371293,
+            0.02290748898678414
+          ]
+        },
+        {
+          "text": "小程序",
+          "x": 164,
+          "y": 431,
+          "w": 69,
+          "h": 26,
+          "score": 0.999920666217804,
+          "engine": "paddleocr",
+          "region": null,
+          "window_fraction": [
+            0.09727164887307237,
+            0.37973568281938325,
+            0.04092526690391459,
+            0.02290748898678414
+          ]
+        }
+      ],
+      "geometry": {
+        "theme": "dark",
+        "median_luminance": 30.0,
+        "selected_list_rows": [
+          {
+            "x": 101,
+            "y": 120,
+            "w": 369,
+            "h": 72
+          }
+        ],
+        "vertical_separators": [
+          {
+            "x": 100,
+            "fraction": 0.0593,
+            "coverage": 1.0
+          },
+          {
+            "x": 469,
+            "fraction": 0.2782,
+            "coverage": 0.989
+          }
+        ],
+        "composer_candidates": [],
+        "right_panel_candidate": null,
+        "method": "local_contrast_geometry"
+      },
+      "expected_page": "moments_feed",
+      "expected_overlays": [],
+      "expected_panels": [],
+      "expected_content_windows": []
+    },
+    {
+      "name": "channels_loading",
+      "size": [
+        1686,
+        1135
+      ],
+      "boxes": [
+        {
+          "text": "发现",
+          "x": 120,
+          "y": 68,
+          "w": 50,
+          "h": 31,
+          "score": 0.9999712705612183,
+          "engine": "paddleocr",
+          "region": null,
+          "window_fraction": [
+            0.0711743772241993,
+            0.05991189427312775,
+            0.02965599051008304,
+            0.027312775330396475
+          ]
+        },
+        {
+          "text": "朋友圈",
+          "x": 164,
+          "y": 143,
+          "w": 69,
+          "h": 26,
+          "score": 0.9738942980766296,
+          "engine": "paddleocr",
+          "region": null,
+          "window_fraction": [
+            0.09727164887307237,
+            0.12599118942731277,
+            0.04092526690391459,
+            0.02290748898678414
+          ]
+        },
+        {
+          "text": "视频号",
+          "x": 124,
+          "y": 214,
+          "w": 109,
+          "h": 28,
+          "score": 0.999502956867218,
+          "engine": "paddleocr",
+          "region": null,
+          "window_fraction": [
+            0.07354685646500593,
+            0.18854625550660792,
+            0.06465005931198102,
+            0.024669603524229075
+          ]
+        },
+        {
+          "text": "小程序",
+          "x": 164,
+          "y": 431,
+          "w": 69,
+          "h": 26,
+          "score": 0.999920666217804,
+          "engine": "paddleocr",
+          "region": null,
+          "window_fraction": [
+            0.09727164887307237,
+            0.37973568281938325,
+            0.04092526690391459,
+            0.02290748898678414
+          ]
+        }
+      ],
+      "geometry": {
+        "theme": "dark",
+        "median_luminance": 30.0,
+        "selected_list_rows": [
+          {
+            "x": 101,
+            "y": 192,
+            "w": 369,
+            "h": 72
+          }
+        ],
+        "vertical_separators": [
+          {
+            "x": 100,
+            "fraction": 0.0593,
+            "coverage": 1.0
+          },
+          {
+            "x": 469,
+            "fraction": 0.2782,
+            "coverage": 1.0
+          }
+        ],
+        "composer_candidates": [],
+        "right_panel_candidate": null,
+        "method": "local_contrast_geometry"
+      },
+      "expected_page": "channels",
+      "expected_overlays": [],
+      "expected_panels": [],
+      "expected_content_windows": []
+    },
+    {
+      "name": "channels",
+      "size": [
+        1686,
+        1135
+      ],
+      "boxes": [
+        {
+          "text": "发现",
+          "x": 122,
+          "y": 71,
+          "w": 47,
+          "h": 26,
+          "score": 0.9999303221702576,
+          "engine": "paddleocr",
+          "region": null,
+          "window_fraction": [
+            0.07236061684460261,
+            0.06255506607929516,
+            0.027876631079478055,
+            0.02290748898678414
+          ]
+        },
+        {
+          "text": "朋友圈",
+          "x": 164,
+          "y": 142,
+          "w": 68,
+          "h": 29,
+          "score": 0.9861884117126465,
+          "engine": "paddleocr",
+          "region": null,
+          "window_fraction": [
+            0.09727164887307237,
+            0.12511013215859032,
+            0.04033214709371293,
+            0.02555066079295154
+          ]
+        },
+        {
+          "text": "视频号",
+          "x": 161,
+          "y": 216,
+          "w": 70,
+          "h": 25,
+          "score": 0.9999362826347351,
+          "engine": "paddleocr",
+          "region": null,
+          "window_fraction": [
+            0.09549228944246738,
+            0.19030837004405288,
+            0.04151838671411625,
+            0.022026431718061675
+          ]
+        },
+        {
+          "text": "小程序",
+          "x": 165,
+          "y": 432,
+          "w": 68,
+          "h": 25,
+          "score": 0.9998077750205994,
+          "engine": "paddleocr",
+          "region": null,
+          "window_fraction": [
+            0.09786476868327403,
+            0.38061674008810575,
+            0.04033214709371293,
+            0.022026431718061675
+          ]
+        }
+      ],
+      "geometry": {
+        "theme": "dark",
+        "median_luminance": 85.0,
+        "selected_list_rows": [
+          {
+            "x": 101,
+            "y": 192,
+            "w": 369,
+            "h": 72
+          }
+        ],
+        "vertical_separators": [
+          {
+            "x": 100,
+            "fraction": 0.0593,
+            "coverage": 1.0
+          },
+          {
+            "x": 469,
+            "fraction": 0.2782,
+            "coverage": 0.915
+          }
+        ],
+        "composer_candidates": [],
+        "right_panel_candidate": null,
+        "method": "local_contrast_geometry"
+      },
+      "expected_page": "channels",
+      "expected_overlays": [],
+      "expected_panels": [],
+      "expected_content_windows": []
+    },
+    {
+      "name": "web_search_center",
+      "size": [
+        1686,
+        1135
+      ],
+      "boxes": [
+        {
+          "text": "发现",
+          "x": 122,
+          "y": 71,
+          "w": 48,
+          "h": 26,
+          "score": 0.9999409914016724,
+          "engine": "paddleocr",
+          "region": null,
+          "window_fraction": [
+            0.07236061684460261,
+            0.06255506607929516,
+            0.028469750889679714,
+            0.02290748898678414
+          ]
+        },
+        {
+          "text": "朋友圈",
+          "x": 165,
+          "y": 143,
+          "w": 67,
+          "h": 26,
+          "score": 0.9561204314231873,
+          "engine": "paddleocr",
+          "region": null,
+          "window_fraction": [
+            0.09786476868327403,
+            0.12599118942731277,
+            0.039739027283511266,
+            0.02290748898678414
+          ]
+        },
+        {
+          "text": "视频号",
+          "x": 163,
+          "y": 215,
+          "w": 69,
+          "h": 26,
+          "score": 0.9999368786811829,
+          "engine": "paddleocr",
+          "region": null,
+          "window_fraction": [
+            0.0966785290628707,
+            0.1894273127753304,
+            0.04092526690391459,
+            0.02290748898678414
+          ]
+        },
+        {
+          "text": "搜一搜",
+          "x": 1033,
+          "y": 269,
+          "w": 130,
+          "h": 51,
+          "score": 0.9923837780952454,
+          "engine": "paddleocr",
+          "region": null,
+          "window_fraction": [
+            0.6126927639383155,
+            0.23700440528634362,
+            0.0771055753262159,
+            0.044933920704845816
+          ]
+        },
+        {
+          "text": "搜索",
+          "x": 713,
+          "y": 399,
+          "w": 63,
+          "h": 40,
+          "score": 0.9074466228485107,
+          "engine": "paddleocr",
+          "region": null,
+          "window_fraction": [
+            0.42289442467378413,
+            0.3515418502202643,
+            0.037366548042704624,
+            0.03524229074889868
+          ]
+        },
+        {
+          "text": "搜索",
+          "x": 1354,
+          "y": 403,
+          "w": 54,
+          "h": 32,
+          "score": 0.9232290983200073,
+          "engine": "paddleocr",
+          "region": null,
+          "window_fraction": [
+            0.8030842230130486,
+            0.35506607929515416,
+            0.03202846975088968,
+            0.028193832599118944
+          ]
+        },
+        {
+          "text": "小程序",
+          "x": 164,
+          "y": 431,
+          "w": 69,
+          "h": 26,
+          "score": 0.999920666217804,
+          "engine": "paddleocr",
+          "region": null,
+          "window_fraction": [
+            0.09727164887307237,
+            0.37973568281938325,
+            0.04092526690391459,
+            0.02290748898678414
+          ]
+        },
+        {
+          "text": "全部",
+          "x": 717,
+          "y": 474,
+          "w": 48,
+          "h": 28,
+          "score": 0.9999508857727051,
+          "engine": "paddleocr",
+          "region": null,
+          "window_fraction": [
+            0.42526690391459077,
+            0.41762114537444933,
+            0.028469750889679714,
+            0.024669603524229075
+          ]
+        },
+        {
+          "text": "朋友圈",
+          "x": 1245,
+          "y": 473,
+          "w": 70,
+          "h": 28,
+          "score": 0.9566827416419983,
+          "engine": "paddleocr",
+          "region": null,
+          "window_fraction": [
+            0.7384341637010676,
+            0.4167400881057269,
+            0.04151838671411625,
+            0.024669603524229075
+          ]
+        }
+      ],
+      "geometry": {
+        "theme": "dark",
+        "median_luminance": 25.0,
+        "selected_list_rows": [
+          {
+            "x": 101,
+            "y": 264,
+            "w": 369,
+            "h": 72
+          }
+        ],
+        "vertical_separators": [
+          {
+            "x": 100,
+            "fraction": 0.0593,
+            "coverage": 1.0
+          },
+          {
+            "x": 469,
+            "fraction": 0.2782,
+            "coverage": 1.0
+          }
+        ],
+        "composer_candidates": [],
+        "right_panel_candidate": null,
+        "method": "local_contrast_geometry"
+      },
+      "expected_page": "discover",
+      "expected_overlays": [],
+      "expected_panels": [
+        "web_search"
+      ],
+      "expected_content_windows": []
+    },
+    {
+      "name": "mini_programs_loading",
+      "size": [
+        1686,
+        1135
+      ],
+      "boxes": [
+        {
+          "text": "发现",
+          "x": 120,
+          "y": 68,
+          "w": 50,
+          "h": 31,
+          "score": 0.9999712705612183,
+          "engine": "paddleocr",
+          "region": null,
+          "window_fraction": [
+            0.0711743772241993,
+            0.05991189427312775,
+            0.02965599051008304,
+            0.027312775330396475
+          ]
+        },
+        {
+          "text": "小程序",
+          "x": 500,
+          "y": 66,
+          "w": 84,
+          "h": 36,
+          "score": 0.9999821782112122,
+          "engine": "paddleocr",
+          "region": null,
+          "window_fraction": [
+            0.29655990510083036,
+            0.05814977973568282,
+            0.0498220640569395,
+            0.03171806167400881
+          ]
+        },
+        {
+          "text": "朋友圈",
+          "x": 165,
+          "y": 143,
+          "w": 67,
+          "h": 26,
+          "score": 0.9561204314231873,
+          "engine": "paddleocr",
+          "region": null,
+          "window_fraction": [
+            0.09786476868327403,
+            0.12599118942731277,
+            0.039739027283511266,
+            0.02290748898678414
+          ]
+        },
+        {
+          "text": "视频号",
+          "x": 164,
+          "y": 215,
+          "w": 68,
+          "h": 26,
+          "score": 0.9999604225158691,
+          "engine": "paddleocr",
+          "region": null,
+          "window_fraction": [
+            0.09727164887307237,
+            0.1894273127753304,
+            0.04033214709371293,
+            0.02290748898678414
+          ]
+        },
+        {
+          "text": "小程序",
+          "x": 162,
+          "y": 429,
+          "w": 72,
+          "h": 29,
+          "score": 0.9998950958251953,
+          "engine": "paddleocr",
+          "region": null,
+          "window_fraction": [
+            0.09608540925266904,
+            0.37797356828193834,
+            0.042704626334519574,
+            0.02555066079295154
+          ]
+        }
+      ],
+      "geometry": {
+        "theme": "dark",
+        "median_luminance": 17.0,
+        "selected_list_rows": [
+          {
+            "x": 101,
+            "y": 408,
+            "w": 369,
+            "h": 72
+          }
+        ],
+        "vertical_separators": [
+          {
+            "x": 100,
+            "fraction": 0.0593,
+            "coverage": 1.0
+          },
+          {
+            "x": 469,
+            "fraction": 0.2782,
+            "coverage": 1.0
+          }
+        ],
+        "composer_candidates": [],
+        "right_panel_candidate": null,
+        "method": "local_contrast_geometry"
+      },
+      "expected_page": "mini_program_list",
+      "expected_overlays": [],
+      "expected_panels": [],
+      "expected_content_windows": []
+    },
+    {
+      "name": "mini_programs",
+      "size": [
+        1686,
+        1135
+      ],
+      "boxes": [
+        {
+          "text": "发现",
+          "x": 121,
+          "y": 70,
+          "w": 49,
+          "h": 27,
+          "score": 0.9999610781669617,
+          "engine": "paddleocr",
+          "region": null,
+          "window_fraction": [
+            0.07176749703440095,
+            0.06167400881057269,
+            0.029062870699881376,
+            0.02378854625550661
+          ]
+        },
+        {
+          "text": "小程序",
+          "x": 500,
+          "y": 65,
+          "w": 84,
+          "h": 36,
+          "score": 0.9999777674674988,
+          "engine": "paddleocr",
+          "region": null,
+          "window_fraction": [
+            0.29655990510083036,
+            0.05726872246696035,
+            0.0498220640569395,
+            0.03171806167400881
+          ]
+        },
+        {
+          "text": "朋友圈",
+          "x": 164,
+          "y": 143,
+          "w": 68,
+          "h": 26,
+          "score": 0.9725327491760254,
+          "engine": "paddleocr",
+          "region": null,
+          "window_fraction": [
+            0.09727164887307237,
+            0.12599118942731277,
+            0.04033214709371293,
+            0.02290748898678414
+          ]
+        },
+        {
+          "text": "最近使用",
+          "x": 603,
+          "y": 178,
+          "w": 88,
+          "h": 26,
+          "score": 0.9998700618743896,
+          "engine": "paddleocr",
+          "region": null,
+          "window_fraction": [
+            0.35765124555160144,
+            0.1568281938325991,
+            0.05219454329774614,
+            0.02290748898678414
+          ]
+        },
+        {
+          "text": "视频号",
+          "x": 163,
+          "y": 214,
+          "w": 70,
+          "h": 29,
+          "score": 0.9999203681945801,
+          "engine": "paddleocr",
+          "region": null,
+          "window_fraction": [
+            0.0966785290628707,
+            0.18854625550660792,
+            0.04151838671411625,
+            0.02555066079295154
+          ]
+        },
+        {
+          "text": "搜一搜",
+          "x": 160,
+          "y": 285,
+          "w": 74,
+          "h": 30,
+          "score": 0.9698068499565125,
+          "engine": "paddleocr",
+          "region": null,
+          "window_fraction": [
+            0.09489916963226572,
+            0.2511013215859031,
+            0.04389086595492289,
+            0.02643171806167401
+          ]
+        },
+        {
+          "text": "小程序",
+          "x": 162,
+          "y": 429,
+          "w": 73,
+          "h": 29,
+          "score": 0.9998810291290283,
+          "engine": "paddleocr",
+          "region": null,
+          "window_fraction": [
+            0.09608540925266904,
+            0.37797356828193834,
+            0.04329774614472123,
+            0.02555066079295154
+          ]
+        }
+      ],
+      "geometry": {
+        "theme": "dark",
+        "median_luminance": 44.0,
+        "selected_list_rows": [
+          {
+            "x": 101,
+            "y": 408,
+            "w": 369,
+            "h": 72
+          }
+        ],
+        "vertical_separators": [
+          {
+            "x": 100,
+            "fraction": 0.0593,
+            "coverage": 1.0
+          },
+          {
+            "x": 469,
+            "fraction": 0.2782,
+            "coverage": 1.0
+          },
+          {
+            "x": 580,
+            "fraction": 0.344,
+            "coverage": 0.872
+          },
+          {
+            "x": 1558,
+            "fraction": 0.9241,
+            "coverage": 0.872
+          }
+        ],
+        "composer_candidates": [],
+        "right_panel_candidate": null,
+        "method": "local_contrast_geometry"
+      },
+      "expected_page": "mini_program_list",
+      "expected_overlays": [],
+      "expected_panels": [],
+      "expected_content_windows": []
+    },
+    {
+      "name": "main_menu",
+      "size": [
+        300,
+        465
+      ],
+      "boxes": [
+        {
+          "text": "锁定",
+          "x": 57,
+          "y": 274,
+          "w": 50,
+          "h": 31,
+          "score": 0.9973841905593872,
+          "engine": "paddleocr",
+          "region": null,
+          "window_fraction": [
+            0.19,
+            0.589247311827957,
+            0.16666666666666666,
+            0.06666666666666667
+          ]
+        },
+        {
+          "text": "设置",
+          "x": 57,
+          "y": 380,
+          "w": 49,
+          "h": 29,
+          "score": 0.999029815196991,
+          "engine": "paddleocr",
+          "region": null,
+          "window_fraction": [
+            0.19,
+            0.8172043010752689,
+            0.16333333333333333,
+            0.06236559139784946
+          ]
+        }
+      ],
+      "geometry": {
+        "theme": "dark",
+        "median_luminance": 47.0,
+        "selected_list_rows": [],
+        "vertical_separators": [
+          {
+            "x": 34,
+            "fraction": 0.1133,
+            "coverage": 1.0
+          },
+          {
+            "x": 262,
+            "fraction": 0.8733,
+            "coverage": 1.0
+          }
+        ],
+        "composer_candidates": [],
+        "right_panel_candidate": {
+          "x": 262,
+          "fraction": 0.8733,
+          "coverage": 1.0
+        },
+        "method": "local_contrast_geometry"
+      },
+      "expected_page": "unknown",
+      "expected_overlays": [
+        "main_menu"
+      ],
+      "expected_panels": [],
+      "expected_content_windows": []
+    },
+    {
+      "name": "settings",
+      "size": [
+        982,
+        851
+      ],
+      "boxes": [],
+      "geometry": {
+        "theme": "dark",
+        "median_luminance": 30.0,
+        "selected_list_rows": [],
+        "vertical_separators": [
+          {
+            "x": 250,
+            "fraction": 0.2546,
+            "coverage": 1.0
+          }
+        ],
+        "composer_candidates": [],
+        "right_panel_candidate": null,
+        "method": "local_contrast_geometry"
+      },
+      "expected_page": "unknown",
+      "expected_overlays": [],
+      "expected_panels": [],
+      "expected_content_windows": []
+    },
+    {
+      "name": "file_transfer",
+      "size": [
+        1686,
+        1135
+      ],
+      "boxes": [
+        {
+          "text": "搜索",
+          "x": 153,
+          "y": 70,
+          "w": 47,
+          "h": 26,
+          "score": 0.931675136089325,
+          "engine": "paddleocr",
+          "region": null,
+          "window_fraction": [
+            0.09074733096085409,
+            0.06167400881057269,
+            0.027876631079478055,
+            0.02290748898678414
+          ]
+        },
+        {
+          "text": "文件传输助手",
+          "x": 491,
+          "y": 68,
+          "w": 130,
+          "h": 26,
+          "score": 0.9998888373374939,
+          "engine": "paddleocr",
+          "region": null,
+          "window_fraction": [
+            0.2912218268090154,
+            0.05991189427312775,
+            0.0771055753262159,
+            0.02290748898678414
+          ]
+        },
+        {
+          "text": "公众号",
+          "x": 184,
+          "y": 237,
+          "w": 70,
+          "h": 30,
+          "score": 0.9999926090240479,
+          "engine": "paddleocr",
+          "region": null,
+          "window_fraction": [
+            0.10913404507710557,
+            0.20881057268722467,
+            0.04151838671411625,
+            0.02643171806167401
+          ]
+        },
+        {
+          "text": "文件传输助手",
+          "x": 185,
+          "y": 433,
+          "w": 131,
+          "h": 27,
+          "score": 0.9996693730354309,
+          "engine": "paddleocr",
+          "region": null,
+          "window_fraction": [
+            0.10972716488730723,
+            0.3814977973568282,
+            0.07769869513641756,
+            0.02378854625550661
+          ]
+        },
+        {
+          "text": "发送",
+          "x": 1580,
+          "y": 1059,
+          "w": 44,
+          "h": 27,
+          "score": 0.9998741149902344,
+          "engine": "paddleocr",
+          "region": null,
+          "window_fraction": [
+            0.9371293001186239,
+            0.9330396475770925,
+            0.02609727164887307,
+            0.02378854625550661
+          ]
+        }
+      ],
+      "geometry": {
+        "theme": "dark",
+        "median_luminance": 30.0,
+        "selected_list_rows": [
+          {
+            "x": 101,
+            "y": 413,
+            "w": 369,
+            "h": 97
+          }
+        ],
+        "vertical_separators": [
+          {
+            "x": 100,
+            "fraction": 0.0593,
+            "coverage": 1.0
+          },
+          {
+            "x": 469,
+            "fraction": 0.2782,
+            "coverage": 1.0
+          },
+          {
+            "x": 1352,
+            "fraction": 0.8019,
+            "coverage": 0.715
+          },
+          {
+            "x": 1558,
+            "fraction": 0.9241,
+            "coverage": 0.729
+          }
+        ],
+        "composer_candidates": [
+          {
+            "x": 483,
+            "y": 817,
+            "w": 1172,
+            "h": 287,
+            "rectangularity": 0.995,
+            "window_fraction": [
+              0.28647686832740216,
+              0.7198237885462555,
+              0.6951364175563464,
+              0.252863436123348
+            ]
+          }
+        ],
+        "right_panel_candidate": {
+          "x": 1352,
+          "fraction": 0.8019,
+          "coverage": 0.715
+        },
+        "method": "local_contrast_geometry"
+      },
+      "expected_page": "file_transfer",
+      "expected_overlays": [],
+      "expected_panels": [],
+      "expected_content_windows": []
+    },
+    {
+      "name": "embedded_search",
+      "size": [
+        2175,
+        1135
+      ],
+      "boxes": [
+        {
+          "text": "搜索",
+          "x": 154,
+          "y": 70,
+          "w": 46,
+          "h": 26,
+          "score": 0.9523528814315796,
+          "engine": "paddleocr",
+          "region": null,
+          "window_fraction": [
+            0.07080459770114943,
+            0.06167400881057269,
+            0.021149425287356322,
+            0.02290748898678414
+          ]
+        },
+        {
+          "text": "文件传输助手",
+          "x": 491,
+          "y": 68,
+          "w": 130,
+          "h": 26,
+          "score": 0.9997982978820801,
+          "engine": "paddleocr",
+          "region": null,
+          "window_fraction": [
+            0.2257471264367816,
+            0.05991189427312775,
+            0.059770114942528735,
+            0.02290748898678414
+          ]
+        },
+        {
+          "text": "公开检索-搜一搜",
+          "x": 1562,
+          "y": 74,
+          "w": 217,
+          "h": 20,
+          "score": 0.9852351546287537,
+          "engine": "paddleocr",
+          "region": null,
+          "window_fraction": [
+            0.7181609195402299,
+            0.06519823788546256,
+            0.09977011494252873,
+            0.01762114537444934
+          ]
+        },
+        {
+          "text": "搜索",
+          "x": 2031,
+          "y": 170,
+          "w": 53,
+          "h": 32,
+          "score": 0.9571428298950195,
+          "engine": "paddleocr",
+          "region": null,
+          "window_fraction": [
+            0.9337931034482758,
+            0.14977973568281938,
+            0.02436781609195402,
+            0.028193832599118944
+          ]
+        },
+        {
+          "text": "公众号",
+          "x": 184,
+          "y": 237,
+          "w": 70,
+          "h": 30,
+          "score": 0.9999926090240479,
+          "engine": "paddleocr",
+          "region": null,
+          "window_fraction": [
+            0.08459770114942529,
+            0.20881057268722467,
+            0.03218390804597701,
+            0.02643171806167401
+          ]
+        },
+        {
+          "text": "文件传输助手",
+          "x": 186,
+          "y": 434,
+          "w": 129,
+          "h": 24,
+          "score": 0.9997789859771729,
+          "engine": "paddleocr",
+          "region": null,
+          "window_fraction": [
+            0.08551724137931034,
+            0.38237885462555066,
+            0.05931034482758621,
+            0.021145374449339206
+          ]
+        },
+        {
+          "text": "发送",
+          "x": 1404,
+          "y": 1059,
+          "w": 42,
+          "h": 27,
+          "score": 0.9999211430549622,
+          "engine": "paddleocr",
+          "region": null,
+          "window_fraction": [
+            0.6455172413793103,
+            0.9330396475770925,
+            0.019310344827586208,
+            0.02378854625550661
+          ]
+        }
+      ],
+      "geometry": {
+        "theme": "dark",
+        "median_luminance": 30.0,
+        "selected_list_rows": [
+          {
+            "x": 101,
+            "y": 413,
+            "w": 369,
+            "h": 97
+          }
+        ],
+        "vertical_separators": [
+          {
+            "x": 100,
+            "fraction": 0.046,
+            "coverage": 1.0
+          },
+          {
+            "x": 469,
+            "fraction": 0.2156,
+            "coverage": 1.0
+          },
+          {
+            "x": 1175,
+            "fraction": 0.5402,
+            "coverage": 0.715
+          },
+          {
+            "x": 1381,
+            "fraction": 0.6349,
+            "coverage": 0.729
+          },
+          {
+            "x": 1497,
+            "fraction": 0.6883,
+            "coverage": 1.0
+          }
+        ],
+        "composer_candidates": [
+          {
+            "x": 483,
+            "y": 817,
+            "w": 997,
+            "h": 287,
+            "rectangularity": 0.993,
+            "window_fraction": [
+              0.22206896551724137,
+              0.7198237885462555,
+              0.45839080459770115,
+              0.252863436123348
+            ]
+          }
+        ],
+        "right_panel_candidate": {
+          "x": 1497,
+          "fraction": 0.6883,
+          "coverage": 1.0
+        },
+        "method": "local_contrast_geometry"
+      },
+      "expected_page": "file_transfer",
+      "expected_overlays": [],
+      "expected_panels": [
+        "web_search"
+      ],
+      "expected_content_windows": []
+    }
+  ]
+}

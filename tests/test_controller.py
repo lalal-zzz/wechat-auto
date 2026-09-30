@@ -16,6 +16,7 @@ def test_connect_registers_only_basic_skill(application):
     application.return_value.is_connected.return_value = True
     agent = AgentLoop(session=SessionConfig(auto_activate=False)).connect()
     assert agent.router.available_skills == ["basic_action"]
+    assert agent.basic_skill.name == "basic_action"
 
 
 @patch("wechat_auto.engine.loop.Application")

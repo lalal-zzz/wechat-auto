@@ -57,3 +57,4 @@ exports/
 data/
 *.db
 *.sqlite
+data/.secrets/

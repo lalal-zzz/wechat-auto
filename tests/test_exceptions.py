@@ -1,5 +1,8 @@
 from wechat_auto.exceptions import (
-    ChatNotFoundError, SkillExecutionError, WeChatAutoError, WeChatNotRunningError,
+    ChatNotFoundError,
+    SkillExecutionError,
+    WeChatAutoError,
+    WeChatNotRunningError,
 )
 
 

@@ -1,11 +1,10 @@
 """Parse semantic hints from WeChat type-47 emoji XML."""
 from __future__ import annotations
 
-import html
 import base64
+import html
 import re
 import xml.etree.ElementTree as ET
-
 
 _HINT_FIELDS = ("desc", "attachedtext", "meaning", "name", "title")
 _META_WORDS = {"default", "zh_cn", "zh_tw", "en", "cn", "tw"}

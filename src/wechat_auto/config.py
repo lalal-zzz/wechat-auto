@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Optional
 
 
 @dataclass
@@ -17,7 +16,8 @@ class WeChatConfig:
     # This library attaches to an already-running, logged-in client.  Starting
     # Weixin from an automation process can create a second client/session.
     auto_start: bool = False
-    executable_path: Optional[str] = None
+    page_layout_directory: str = "data/layouts"
+    executable_path: str | None = None
     launch_wait_timeout: float = 15.0
 
     # Timeouts (in seconds)
@@ -32,6 +32,7 @@ class WeChatConfig:
     action_delay: float = 0.3
     type_delay: float = 0.05
     click_delay: float = 0.1
+    ui_settle_delay: float = 0.12
     scroll_delay: float = 0.5
     between_messages_delay: float = 0.5
     after_send_delay: float = 0.3
@@ -74,7 +75,19 @@ class WeChatConfig:
     keyboard_input_mode: str = "wmchar"  # 'winmsg' or 'wmchar'
     # Weixin 4.x action invariant: HWND executes, OCR observes/falls back.
     action_driver: str = "hwnd"
-    ocr_fallback_enabled: bool = True
+    # OCR is diagnostic/fallback only; normal HWND flows do not load it.
+    ocr_verify_enabled: bool = False
+    ocr_fallback_enabled: bool = False
+    # Prefer PaddleOCR mobile for bounded UI regions; RapidOCR remains a
+    # local fallback for installations that have not installed Paddle yet.
+    ocr_engine: str = "paddle"
+    ocr_allow_rapid_fallback: bool = True
+    paddle_detection_model: str = "PP-OCRv5_mobile_det"
+    paddle_recognition_model: str = "PP-OCRv5_mobile_rec"
+
+    # Optional strict layout calibration.  When configured, fixed-coordinate
+    # actions stop if the captured window size differs from this profile.
+    layout_profile_path: str | None = None
 
     # Optional log level
     log_level: str = "INFO"
@@ -92,7 +105,7 @@ class SessionConfig:
     minimize_after: bool = False
     silent_mode: bool = False
     screenshot_on_error: bool = True
-    screenshot_dir: Optional[str] = None
+    screenshot_dir: str | None = None
 
     # Custom overrides
     overrides: dict = field(default_factory=dict)

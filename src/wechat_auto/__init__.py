@@ -4,7 +4,7 @@ Architecture:
     - Read plane: local encrypted DB -> private offline SQLite
     - Action plane: one BasicSkill; every UI mutation uses HWND messages
     - Observation plane: OCR verifies HWND outcomes and supplies fallback coordinates
-    - Composite skills: optional future orchestration, disabled by default
+    - Analysis orchestration: MCP tools and repository Skills above BasicSkill
 
 Quick start::
 
@@ -23,31 +23,29 @@ Or dispatch a primitive HWND action::
     agent.router.route("basic_action", {"action": "open_chat", "contact": "文件传输助手"})
 """
 
-__version__ = "0.4.0"
-
+from wechat_auto.actions.basic import BasicLayout, BasicSkill
+from wechat_auto.config import SessionConfig, WeChatConfig
 from wechat_auto.engine.loop import AgentLoop
-from wechat_auto.config import WeChatConfig, SessionConfig
-from wechat_auto.actions.basic import BasicSkill, BasicLayout
-from wechat_auto.actions.composite import CompositeSkill
 from wechat_auto.exceptions import (
-    WeChatAutoError,
-    WeChatNotRunningError,
     ChatNotFoundError,
     SkillExecutionError,
+    WeChatAutoError,
+    WeChatNotRunningError,
 )
+from wechat_auto.version import __version__
 
 __all__ = [
     # Main entry point
     "AgentLoop",
-    # Config
-    "WeChatConfig",
-    "SessionConfig",
-    "BasicSkill",
     "BasicLayout",
-    "CompositeSkill",
+    "BasicSkill",
+    "ChatNotFoundError",
+    "SessionConfig",
+    "SkillExecutionError",
     # Exceptions
     "WeChatAutoError",
+    # Config
+    "WeChatConfig",
     "WeChatNotRunningError",
-    "ChatNotFoundError",
-    "SkillExecutionError",
+    "__version__",
 ]

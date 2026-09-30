@@ -6,10 +6,16 @@
 顶层 HWND 发送 `WM_LBUTTON*`、`WM_RBUTTON*`、`WM_MOUSEWHEEL`、`WM_KEY*` 和
 `WM_CHAR`。不存在 UIA、物理鼠标或物理键盘降级分支。
 
+联系人动作以 `username/wxid` 为目标。数据库解析器生成版本化动作计划；自绘页面使用
+项目自有语义 ID（如 `21.09:more`、`22.03:delete_contact`），布局档案保存其窗口比例
+坐标。计划先持久化并绑定单次确认令牌，`BasicSkill` 只执行已确认且未被修改的计划。
+未校准语义坐标、布局不匹配或身份不唯一时停止执行。
+
 ## 观察面
 
-`VisionAutomation` 使用 Win32 `PrintWindow` 截图和 RapidOCR。它只能返回文字、
-红点或坐标，不能点击、输入或滚动。替代坐标由 `BasicSkill` 再交给 HWND 驱动。
+`VisionAutomation` 使用 Win32 `PrintWindow` 截图，按需加载 PaddleOCR mobile，
+并可使用 RapidOCR 本地后备。它只能返回文字、红点或坐标，不能点击、输入或滚动。
+替代坐标由 `BasicSkill` 再交给 HWND 驱动。
 
 ## 数据面
 
@@ -31,5 +37,19 @@
 
 ## 高级能力
 
-`CompositeSkill` 目前只是接口。未来自动回复、群上下文分析和朋友圈策略只能组合
-只读后端与同一个 `BasicSkill`，不得绕过确认边界或创建第二套 UI 驱动。
+高级流程由 MCP 工具和仓库 Skills 组合只读后端与同一个 `BasicSkill`，不得绕过
+确认边界或创建第二套 UI 驱动。高级能力通过本地 stdio MCP 暴露：
+
+```text
+原始归档 → wechat_memory.sqlite3 → 紧凑 Markdown → MCP 上下文裁剪
+```
+
+- `memory/store.py`：人物、会话、Claim、Event、证据引用、分析任务、水位和依赖。
+- `memory/markdown.py`：当前完整 Memory 和历史完整版本。
+- `memory/analysis.py`：输入指纹、增量提交和下游失效传播。
+- `memory/indexer.py`：只引用现有消息、资料和朋友圈归档，不复制正文或媒体。
+- `mcp_server.py`：供外部 Agent 使用的本地 stdio 工具；发送工具只在注入
+  `BasicSkill` 后注册，并要求单次精确确认。
+
+OCR 首选 PaddleOCR mobile 模型，未安装时可配置为使用现有 RapidOCR 本地后备。
+无论使用哪个 OCR 引擎，它都只返回观察框和窗口比例坐标。

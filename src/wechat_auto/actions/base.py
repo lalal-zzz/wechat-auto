@@ -1,7 +1,7 @@
 """Minimal base for the single HWND action skill."""
 from __future__ import annotations
 
-from typing import Any, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from wechat_auto.config import SessionConfig, WeChatConfig
 
@@ -13,17 +13,19 @@ if TYPE_CHECKING:
 class BaseSkill:
     name = "base_skill"
 
-    def __init__(self, application: "Application", config: WeChatConfig,
+    def __init__(self, application: Application, config: WeChatConfig,
                  session: SessionConfig):
         self._app = application
         self._config = config
         self._session = session
 
     @property
-    def vision(self) -> "VisionAutomation":
+    def vision(self) -> VisionAutomation:
         if getattr(self, "_vision_auto", None) is None:
             from wechat_auto.primitives.vision import VisionAutomation
-            self._vision_auto = VisionAutomation(self._app, self._config)
+            self._vision_auto = VisionAutomation(
+                self._app, self._config, shot_dir=self._session.screenshot_dir
+            )
         return self._vision_auto
 
     @property
@@ -34,6 +36,7 @@ class BaseSkill:
                 self._app,
                 search_mode=self._config.keyboard_search_mode,
                 input_mode=self._config.keyboard_input_mode,
+                auto_activate=self._session.auto_activate,
             )
         return self._keyboard_only_auto
 

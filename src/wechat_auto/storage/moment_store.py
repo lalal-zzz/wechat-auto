@@ -3,8 +3,8 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from pathlib import Path
 from collections.abc import Iterable
+from pathlib import Path
 
 
 class MomentStore:
@@ -64,6 +64,18 @@ class MomentStore:
         return [{"id": r[0], "username": r[1], "nickname": r[2], "create_time": r[3], "text": r[4],
                  "images": json.loads(r[5]), "videos": json.loads(r[6]), "likes": json.loads(r[7]),
                  "comments": json.loads(r[8])} for r in rows]
+
+    def get(self, moment_id: str) -> dict | None:
+        row = self._connection.execute("""
+            SELECT id,username,nickname,create_time,text,images_json,videos_json,likes_json,comments_json
+            FROM moments WHERE id=?
+        """, (moment_id,)).fetchone()
+        if row is None:
+            return None
+        return {"id": row[0], "username": row[1], "nickname": row[2],
+                "create_time": row[3], "text": row[4], "images": json.loads(row[5]),
+                "videos": json.loads(row[6]), "likes": json.loads(row[7]),
+                "comments": json.loads(row[8])}
 
     def existing_ids(self, ids: Iterable[str]) -> set[str]:
         values = [str(item) for item in ids if item]

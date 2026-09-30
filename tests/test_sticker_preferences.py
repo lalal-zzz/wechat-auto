@@ -1,6 +1,9 @@
 import sqlite3
 
-from wechat_auto.storage.sticker_preferences import StickerCatalog, StickerPreferenceAnalyzer
+from wechat_auto.storage.sticker_preferences import (
+    StickerCatalog,
+    StickerPreferenceAnalyzer,
+)
 
 
 def _history(path):

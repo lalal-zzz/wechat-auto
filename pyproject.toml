@@ -1,0 +1,5 @@
+[tool.ruff.lint]
+# These catches are deliberate integration boundaries around Win32, optional
+# OCR/database adapters, and command-line entry points. They convert failures
+# into receipts, fallbacks, or redacted exit records rather than hiding them.
+ignore = ["BLE001", "S110", "S112"]

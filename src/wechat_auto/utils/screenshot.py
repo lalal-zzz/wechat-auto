@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import logging
 import os
-from datetime import datetime
-from typing import TYPE_CHECKING, Optional
+from datetime import datetime, timezone
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from PIL import Image
@@ -18,7 +18,7 @@ DEFAULT_OUTPUT_DIR = os.path.join("tests", "artifacts")
 class ScreenshotHelper:
     """Capture window/element screenshots and persist them as artifacts."""
 
-    def __init__(self, output_dir: Optional[str] = None, enabled: bool = True):
+    def __init__(self, output_dir: str | None = None, enabled: bool = True):
         self._output_dir = output_dir or DEFAULT_OUTPUT_DIR
         self._enabled = enabled
 
@@ -30,11 +30,12 @@ class ScreenshotHelper:
     def enabled(self) -> bool:
         return self._enabled
 
-    def capture_window(self, hwnd: int) -> Optional["Image.Image"]:
+    def capture_window(self, hwnd: int) -> Image.Image | None:
         """Capture a top-level HWND without UIA or pywinauto."""
         if not self._enabled or not hwnd:
             return None
         import ctypes
+
         import win32gui
         import win32ui
         from PIL import Image
@@ -73,7 +74,7 @@ class ScreenshotHelper:
             if source_dc:
                 win32gui.ReleaseDC(int(hwnd), source_dc)
 
-    def save(self, image: Optional["Image.Image"], skill: str, tag: str) -> Optional[str]:
+    def save(self, image: Image.Image | None, skill: str, tag: str) -> str | None:
         """Persist a captured image as ``<skill>_<timestamp>_<tag>.png``.
 
         Returns:
@@ -83,7 +84,7 @@ class ScreenshotHelper:
             return None
         try:
             os.makedirs(self._output_dir, exist_ok=True)
-            stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
             path = os.path.join(self._output_dir, f"{skill}_{stamp}_{tag}.png")
             image.save(path)
             logger.info("Screenshot saved: %s", path)
@@ -92,6 +93,6 @@ class ScreenshotHelper:
             logger.warning("Failed to save screenshot: %s", exc)
             return None
 
-    def shot_window(self, hwnd: int, skill: str, tag: str) -> Optional[str]:
+    def shot_window(self, hwnd: int, skill: str, tag: str) -> str | None:
         """Capture and save a window in one call."""
         return self.save(self.capture_window(hwnd), skill, tag)

@@ -9,11 +9,22 @@ from wechat_auto.primitives.vision import (
     match_boxes,
     name_for_dot,
     normalize_text,
+    parse_search_sections,
+    scoped_search_matches,
 )
 
 PIL = pytest.importorskip("PIL")
-from PIL import Image, ImageDraw  # noqa: E402
+from PIL import Image, ImageDraw
 
+
+@pytest.mark.parametrize('heading', ['文章', '最近使用过的小程序', '搜索网络结果', '功能'])
+def test_noncontact_search_section_cannot_supply_recipient(heading):
+    boxes = [
+        {'text': '联系人', 'x': 10, 'y': 20, 'w': 50, 'h': 20},
+        {'text': heading, 'x': 10, 'y': 80, 'w': 100, 'h': 20},
+        {'text': '张三', 'x': 10, 'y': 120, 'w': 50, 'h': 20},
+    ]
+    assert scoped_search_matches(boxes, '张三', 'contact')[0] == []
 
 # ---------------------------------------------------------------------------
 # Test doubles
@@ -65,6 +76,39 @@ def test_match_boxes_contains_and_sorted_top_down():
 
 def test_match_boxes_empty_keyword_returns_empty():
     assert match_boxes([box("abc", 0, 0)], "  ", exact=False) == []
+
+
+def test_search_sections_follow_observed_order_not_fixed_order():
+    boxes = [
+        box("群聊", 10, 10), box("项目", 30, 40),
+        box("联系人", 10, 80), box("项目", 30, 110),
+    ]
+    sections = parse_search_sections(boxes)
+    assert [item["section"] for item in sections] == ["group", "contact"]
+    matches, order = scoped_search_matches(boxes, "项目", "contact")
+    assert order == ["group", "contact"]
+    assert [item["y"] for item in matches] == [110]
+
+
+def test_scoped_search_never_returns_official_or_web_results_for_contact():
+    boxes = [
+        box("联系人", 10, 10), box("目标", 30, 40),
+        box("公众号", 10, 80), box("目标", 30, 110),
+        box("网络搜索", 10, 150), box("目标", 30, 180),
+    ]
+    matches, sections = scoped_search_matches(boxes, "目标", "contact")
+    assert [item["y"] for item in matches] == [40]
+    assert sections == ["contact", "official_account", "web"]
+
+
+def test_scoped_search_never_returns_official_or_web_results_for_group():
+    boxes = [
+        box("群聊", 10, 10), box("目标群", 30, 40),
+        box("服务号", 10, 80), box("目标群", 30, 110),
+        box("搜一搜", 10, 150), box("目标群", 30, 180),
+    ]
+    matches, _ = scoped_search_matches(boxes, "目标群", "group")
+    assert [item["y"] for item in matches] == [40]
 
 
 # ---------------------------------------------------------------------------
@@ -130,3 +174,29 @@ def test_region_of_converts_fractions():
 def test_size_returns_zero_without_window():
     vision = VisionAutomation(StubApp())  # handle=0 -> capture None
     assert vision.size() == (0, 0)
+
+
+def test_green_navigation_probe_does_not_use_ocr():
+    vision = VisionAutomation(StubApp())
+    image = Image.new("RGB", (100, 100), (30, 30, 30))
+    ImageDraw.Draw(image).rectangle([45, 45, 55, 55], fill=(7, 193, 96))
+    vision.capture = lambda region=None: image
+    assert vision.is_green_at(.5, .5, radius=.1, min_pixels=10)
+
+
+def test_avatar_template_match_is_bounded_and_no_ocr():
+    import io
+    image = Image.new("RGB", (400, 300), (30, 30, 30))
+    avatar = Image.new("RGB", (80, 80), (20, 90, 160))
+    draw = ImageDraw.Draw(avatar)
+    draw.rectangle([20, 10, 60, 70], fill=(220, 180, 40))
+    shown = avatar.resize((42, 42))
+    image.paste(shown, (50, 120))
+    payload = io.BytesIO()
+    avatar.save(payload, format="PNG")
+    vision = VisionAutomation(StubApp())
+    vision.capture = lambda region=None: image
+    match = vision.find_avatar(payload.getvalue(), region_fractions=(0, 0, .5, 1),
+                               min_score=.6, min_margin=.01)
+    assert match is not None
+    assert match["ocr_used"] is False
