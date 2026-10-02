@@ -79,3 +79,20 @@ Package 0.8.1, window observer 1, page catalog 3, page actions 4.
 Read tool versions and operation availability; never reuse historical HWNDs or screenshot
 coordinates. Recognition does not certify clicking, and opening an album does not prove
 complete remote history. Raw frames and operational records are local-only.
+
+## 数据更新与 Skill 联动
+
+执行前读取共用的
+[数据新鲜度与联动规则](../../docs/SKILL_DATA_WORKFLOW.md)，先确定历史快照、当前
+状态、回复或 UI 模式。联动由当前 Agent 读取相关 SKILL.md 并执行其工具流程，
+不是自动派生代理、创建定时任务或扩大授权。
+
+每一步 UI 操作都重新观察 HWND、页面、控件与几何，不能复用上个 Skill 的
+截图坐标。数据同步的新鲜度不能替代当前帧证明，页面识别也不替代联系人身份。
+联系人定位前需要稳定身份时联动 [wechat-identity-audit](../wechat-identity-audit/SKILL.md)，
+本地映射更新交给 [wechat-sync](../wechat-sync/SKILL.md)。
+个人分组/资料身份验证成功后，把当前目标与回执交给
+[wechat-profile-moments](../wechat-profile-moments/SKILL.md) 补采资料或加载相册；
+回复页面核验只交给 [wechat-reply-monitor](../wechat-reply-monitor/SKILL.md)，不代其发送。
+截图复核仅解决白名单导航的一步定位；过期帧、未知窗口、同名歧义或后置失败
+停止并交接失败状态，不推进下一联系人，不把图片坐标当成持续授权。

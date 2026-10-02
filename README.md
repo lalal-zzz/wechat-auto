@@ -117,6 +117,15 @@ OCR observes text and boxes; it never clicks. Traditional CV observes current di
 
 The detector cross-checks dividers against the composer's right edge to distinguish content-card borders. Arbitrary resizing and all page combinations are not certified. See the [OCR guide](docs/PAGE_OCR.md) and [page catalog](docs/UI_PAGE_CATALOG.md).
 
+## Data freshness and Skill handoffs
+
+For current-state tasks, update the relevant WeChat sources before indexing the project
+archives. Analyze affected months, then conversation/person memories and events, before
+refreshing charts or constructing reply context. Historical tasks can use a stated snapshot.
+Each SKILL.md defines its prerequisites and downstream handoff; unchanged inputs skip work.
+These are Agent workflow rules, not a completed automatic MCP freshness gate. See the
+[shared workflow](docs/SKILL_DATA_WORKFLOW.md) and WA-007 in the roadmap.
+
 ## Getting started
 
 Use PowerShell from the repository root and a suitable Windows Python environment. This is currently a src-directory project; set the import path rather than assuming an installable package.

@@ -147,7 +147,7 @@ Before UI navigation, recipient selection, removal auditing, or reply dispatch, 
 [UI_WORKFLOW_RULES.md](../../docs/UI_WORKFLOW_RULES.md). Use its search-state table,
 stable-identity checks, missing/removal distinctions, and failure stop conditions.
 Read [UI_PAGE_CATALOG.md](../../docs/UI_PAGE_CATALOG.md) for page descriptions and
-[ACTION_VERIFICATION_MATRIX.md](../../docs/ACTION_VERIFICATION_MATRIX.md) for actual coverage.
+[ACTION_VERIFICATION_MATRIX.md](../../docs/ACTION_VERIFICATION_MATRIX.md) for verification requirements.
 These references must accompany the repository skill; missing references stop UI work.
 Offline-only analysis does not require screenshots or UI actions. Static rules never
 certify a live recipient; the complete stable-identity send workflow remains WA-005.
@@ -155,3 +155,18 @@ certify a live recipient; the complete stable-identity send workflow remains WA-
 In Contacts, call `actions.ensure_contacts_section`; select only exact rows beneath
 the personal 联系人 header. New Friends, enterprise/service accounts and mixed global
 search are excluded from this path. A failed lookup never proves deletion.
+
+## 数据更新与 Skill 联动
+
+执行前读取共用的
+[数据新鲜度与联动规则](../../docs/SKILL_DATA_WORKFLOW.md)，先确定历史快照、当前
+状态、回复或 UI 模式。联动由当前 Agent 读取相关 SKILL.md 并执行其工具流程，
+不是自动派生代理、创建定时任务或扩大授权。
+
+先按用户请求选择历史快照、当前状态、回复或 UI 模式。当前状态先联动
+[wechat-sync](../wechat-sync/SKILL.md)，身份有歧义再联动
+[wechat-identity-audit](../wechat-identity-audit/SKILL.md)；UI 步骤使用
+[wechat-ui-navigation](../wechat-ui-navigation/SKILL.md)。
+分析按月份→会话→人物→时间线顺序处理受影响节点，图表交给 wechat-dashboard，
+回复交给 wechat-reply-monitor。不要把整个链路无条件跑一遍。
+交接稳定范围、真实覆盖与成功输出版本；来源未更新或上游失败不称“当前结果”。

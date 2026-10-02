@@ -58,7 +58,24 @@ Before UI navigation, recipient selection, removal auditing, or reply dispatch, 
 [UI_WORKFLOW_RULES.md](../../docs/UI_WORKFLOW_RULES.md). Use its search-state table,
 stable-identity checks, missing/removal distinctions, and failure stop conditions.
 Read [UI_PAGE_CATALOG.md](../../docs/UI_PAGE_CATALOG.md) for page descriptions and
-[ACTION_VERIFICATION_MATRIX.md](../../docs/ACTION_VERIFICATION_MATRIX.md) for actual coverage.
+[ACTION_VERIFICATION_MATRIX.md](../../docs/ACTION_VERIFICATION_MATRIX.md) for verification requirements.
 These references must accompany the repository skill; missing references stop UI work.
 Offline-only analysis does not require screenshots or UI actions. Static rules never
 certify a live recipient; the complete stable-identity send workflow remains WA-005.
+
+## 数据更新与 Skill 联动
+
+执行前读取共用的
+[数据新鲜度与联动规则](../../docs/SKILL_DATA_WORKFLOW.md)，先确定历史快照、当前
+状态、回复或 UI 模式。联动由当前 Agent 读取相关 SKILL.md 并执行其工具流程，
+不是自动派生代理、创建定时任务或扩大授权。
+
+“当前联系人状态”先联动 [wechat-sync](../wechat-sync/SKILL.md) 更新相关来源，
+再核对快照完整性与独立版本。cached_only 联系人条目不是完整当前好友快照，
+一次 UI 查找也不是完整快照，不据此累计缺席或判定删除。
+需要资料核验时联动 [wechat-ui-navigation](../wechat-ui-navigation/SKILL.md) 和
+[wechat-profile-moments](../wechat-profile-moments/SKILL.md)，但不发送探测消息。
+合并/拆分或用户修正需要确认；交接稳定身份映射、范围和证据，不仅交接昵称。
+确认的身份修正交给 [wechat-memory-rebuild](../wechat-memory-rebuild/SKILL.md)，
+普通资料变化交给 [wechat-person-analysis](../wechat-person-analysis/SKILL.md)。
+身份未解决时阻止依赖它的聚合与派发；不自动触发删除、加好友或拉黑。

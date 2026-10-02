@@ -68,7 +68,7 @@ Before UI navigation, recipient selection, removal auditing, or reply dispatch, 
 [UI_WORKFLOW_RULES.md](../../docs/UI_WORKFLOW_RULES.md). Use its search-state table,
 stable-identity checks, missing/removal distinctions, and failure stop conditions.
 Read [UI_PAGE_CATALOG.md](../../docs/UI_PAGE_CATALOG.md) for page descriptions and
-[ACTION_VERIFICATION_MATRIX.md](../../docs/ACTION_VERIFICATION_MATRIX.md) for actual coverage.
+[ACTION_VERIFICATION_MATRIX.md](../../docs/ACTION_VERIFICATION_MATRIX.md) for verification requirements.
 These references must accompany the repository skill; missing references stop UI work.
 Offline-only analysis does not require screenshots or UI actions. Static rules never
 certify a live recipient; the complete stable-identity send workflow remains WA-005.
@@ -92,3 +92,21 @@ with that reviewed item_id and --confirm only after explicit approval for that
 item. Changes to the media fingerprint invalidate approval. Do not transfer
 confirmation to another item or automatically retry HTTP/format failures.
 Read MOMENTS_ARCHIVE.md for private receipts and the actual tested boundary.
+
+## 数据更新与 Skill 联动
+
+执行前读取共用的
+[数据新鲜度与联动规则](../../docs/SKILL_DATA_WORKFLOW.md)，先确定历史快照、当前
+状态、回复或 UI 模式。联动由当前 Agent 读取相关 SKILL.md 并执行其工具流程，
+不是自动派生代理、创建定时任务或扩大授权。
+
+“当前资料/动态”先完成 sync.contacts_moments_local；本地 cached_only 不能称
+远程完整覆盖。需要加载指定个人相册时联动
+[wechat-ui-navigation](../wechat-ui-navigation/SKILL.md)，身份有歧义先联动
+[wechat-identity-audit](../wechat-identity-audit/SKILL.md)。
+资料补采绑定稳定 wxid 和精确 alias；UI 加载结束重新读库，再由
+[wechat-sync](../wechat-sync/SKILL.md) 索引新快照/动态。
+变更证据交给 [wechat-person-analysis](../wechat-person-analysis/SKILL.md)，涉及长期
+事件再交给 [wechat-timeline](../wechat-timeline/SKILL.md)。未变化字段不触发重复版本。
+受限/停滞/部分加载交接真实覆盖；缺签名不清空，无法导航停止当前人和批次。
+媒体下载另走逐项确认，分析任务不自动下载照片或视频。
