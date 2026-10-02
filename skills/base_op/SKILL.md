@@ -34,7 +34,7 @@ Use this sequence for repository tasks:
 2. Persist normalized data, cursors, semantic hints and analysis inputs through `src/wechat_auto/storage/`.
 3. Let the LLM analyze context, contacts, relationships, preferences, events and reply candidates.
 4. For a UI mutation, call the single `BasicSkill` entrypoint in `src/wechat_auto/actions/basic.py`.
-5. Treat OCR as disabled-by-default observation and verification only. The normal path must use local data and HWND actions; OCR may be enabled only for diagnosis or fallback, and it never performs the action itself.
+5. Database synchronization never calls OCR. UI workflows use current-frame CV and lazy OCR for observation and verification; neither performs actions.
 6. Require explicit confirmation before sending messages or stickers, liking/commenting Moments, or downloading remote media.
 7. For history recovery, distinguish legacy `WeChat Files` storage from WeChat 4.x `xwechat_files`. Use official WeChat migration/backup-restore first; never overwrite one encrypted database layout with another.
 8. Merge sources with a collision-resistant message identity containing chat, `local_id`, `sort_seq`, `server_id` and/or message type. Never deduplicate by `local_id` alone.
@@ -48,7 +48,7 @@ Use this sequence for repository tasks:
 - Prepare/send a group mention using the HWND action layer.
 - Prepare/send files and images.
 - HWND click, right-click, scroll and key actions.
-- Open the emoji panel and send a previously verified sticker catalog item.
+- Open the emoji panel; stored sticker cell coordinates cannot authorize sending in a changed layout.
 - Read and archive chat history, incremental messages and Moments locally.
 - Import full local history into an offline SQLite archive, including media BLOBs, with resumable source auditing and collision-resistant IDs.
 - Decode type-47 emoji semantic hints and rank contact-specific sticker preferences.
@@ -65,12 +65,11 @@ Read `docs/FUTURE_TODO.md` before describing or implementing unfinished work. It
 list of IDs, priorities, dependencies, failure behavior, version targets, and completion criteria.
 Do not treat `planned`, `blocked`, code-only, or automated-test-only work as a verified capability.
 Update `PROJECT_STATE.md` when an item is completed; change the roadmap status to `verified` only
-after its stated real-device checks also pass.
+after its stated real-device checks also pass. Local operational records are not distributed with the skill.
 
 ## Important boundaries
 
-- The latest screenshot/navigation audit used Windows WeChat `4.1.15.9`, dark theme,
-  144 DPI, window class `Qt51514QWindowIcon`. Other versions/layouts need validation.
+- Windows WeChat 4.x is the supported architecture. Validate current HWND/page/controls before each UI step.
 - Do not add UIA, pywinauto action calls, physical mouse/keyboard fallbacks, injection, hooks, private protocol construction, or writes to WeChat's database.
 - Do not commit anything under `data/`, chat exports, screenshots, logs or secrets.
 - Memory/version/task infrastructure is implemented; person or relationship conclusions exist only after a successful analysis version is submitted.
@@ -78,7 +77,7 @@ after its stated real-device checks also pass.
 
 ## Page navigation and embedded content
 
-Read `docs/ACTION_VERIFICATION_MATRIX.md` for tested transitions and
+Read `docs/ACTION_VERIFICATION_MATRIX.md` for verification requirements and
 `docs/UI_PAGE_CATALOG.md` for page variants. Enumerated does not mean verified.
 
 1. Observe `vision.observe_windows` before choosing a window. The main frame does
@@ -89,18 +88,18 @@ Read `docs/ACTION_VERIFICATION_MATRIX.md` for tested transitions and
    field, then select its exact network suggestion. Never use Enter to select an
    unknown result; resolve contact/group identity separately.
 4. For one registered navigation step, call `actions.page_operation` with
-   `expected_page` and the correct HWND. Fixed points require exact version,
-   dimensions, DPI and theme; missing calibration stops the action.
+   `expected_page` and the correct HWND. Coordinates must come from the current
+   image; stored size-keyed points are removed.
 5. Close an embedded right tab with `close_content_tab`. Its cross is a same-frame
    OCR/CV observation; BasicSkill routes the click to the embedded Chromium child.
    Never send WM_CLOSE to the main window to close a pane.
-6. For editors, use `cancel`; Escape was ineffective in the sampled remark editor.
+6. For editors, use `cancel`; Do not assume Escape discards an editor.
    Use `dismiss` only for registered menus, and `close` only for auxiliary windows.
 7. Require `success=true` and a verified postcondition before the next step.
    Failure receipts are not success. Stop on ambiguity, OCR/capture failure,
    changed page or unsupported tabs. No automatic blind clicks or repeated sends.
 
-`actions.plan_page_route` returns a declared route, not calibration certification.
+`actions.plan_page_route` returns a declared route, not live-action certification.
 `actions.page_capabilities` separates navigation from confirmed mutations. Sending,
 editing real profiles, likes, comments and downloads keep their dedicated confirmation
 flow; they are not enabled by generic page navigation.
@@ -108,7 +107,7 @@ flow; they are not enabled by generic page navigation.
 ## Failure handling
 
 - Read/archive failures never fall back to writing WeChat databases or using private protocols.
-- OCR/layout mismatch returns a failed observation or receipt; recalibrate before another coordinate action.
+- OCR/layout mismatch stops the step. Reobserve and recalculate; only bounded sidebar navigation retries. If still unresolved, use `vision.prepare_review` and `actions.apply_review` under [WINDOW_NAVIGATION.md](../../docs/WINDOW_NAVIGATION.md). Never directly execute Agent coordinates.
 - Analysis failure keeps the last successful complete Markdown and leaves a resumable job.
 - Identity ambiguity stops aggregation or action until a stable ID or confirmed merge resolves it.
 - Sending, sticker, like, comment, and remote-media failures are never retried automatically; a new attempt needs new confirmation.
@@ -122,7 +121,7 @@ flow; they are not enabled by generic page navigation.
 - `CONTACT_ACTION_PROTOCOL_VERSION` versions project-owned page/element IDs and action-plan fields.
 - Analysis template version and input fingerprint control semantic rebuilds independently from schema.
 - Markdown and event versions are append-only full snapshots; never edit history in place.
-- Layout profiles bind WeChat version, client size, DPI, and theme; mismatch blocks coordinate actions.
+- Current-frame action evidence binds HWND/PID, geometry, DPI and page; a changed frame invalidates it. No stored layout profiles are executable.
 
 ## Contact actions
 
@@ -130,8 +129,7 @@ Resolve a contact with `entities.plan_contact_action(username, action, value)` u
 internal `username/wxid`. Treat alias, nickname, and remark only as UI navigation attributes.
 For a mutation, show the stored plan, call `actions.confirm_contact(action_id)`, then pass only its
 `action_id` and single-use `confirmation_id` to `actions.execute_contact`. Semantic IDs such as
-`21.09:more` and `22.03:delete_contact` are project-owned identifiers whose coordinates must exist
-in the active layout profile. Missing calibration is a hard failure. `set_remark` and
+`21.09:more` and `22.03:delete_contact` are project-owned identifiers, not WeChat controls or reusable coordinates. Unsupported current-frame detectors stop execution. `set_remark` and
 `delete_contact` require confirmation bound to the full stored plan; resync profiles after a
 successful UI action before updating Memory.
 
@@ -153,3 +151,7 @@ Read [UI_PAGE_CATALOG.md](../../docs/UI_PAGE_CATALOG.md) for page descriptions a
 These references must accompany the repository skill; missing references stop UI work.
 Offline-only analysis does not require screenshots or UI actions. Static rules never
 certify a live recipient; the complete stable-identity send workflow remains WA-005.
+
+In Contacts, call `actions.ensure_contacts_section`; select only exact rows beneath
+the personal 联系人 header. New Friends, enterprise/service accounts and mixed global
+search are excluded from this path. A failed lookup never proves deletion.

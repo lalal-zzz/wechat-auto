@@ -21,6 +21,21 @@ class MomentStore:
             )
         """)
         self._connection.execute("CREATE INDEX IF NOT EXISTS idx_moments_user_time ON moments(username, create_time)")
+        self._connection.execute('''CREATE TABLE IF NOT EXISTS message_media (
+            media_id TEXT PRIMARY KEY, moment_id TEXT NOT NULL, kind TEXT NOT NULL,
+            content BLOB NOT NULL, sha256 TEXT NOT NULL, source TEXT NOT NULL,
+            archived_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)''')
+        self._connection.commit()
+
+    def save_media(self, media_id: str, moment_id: str, kind: str, content: bytes, *, source: str = 'exact_local_cache') -> None:
+        import hashlib
+
+        if not content or kind not in {'image', 'video'} or self.get(moment_id) is None:
+            raise ValueError('Known Moment and nonempty image/video content required')
+        self._connection.execute('''INSERT INTO message_media(media_id,moment_id,kind,content,sha256,source)
+            VALUES(?,?,?,?,?,?) ON CONFLICT(media_id) DO UPDATE SET
+            content=excluded.content,sha256=excluded.sha256,source=excluded.source''',
+            (media_id, moment_id, kind, content, hashlib.sha256(content).hexdigest(), source))
         self._connection.commit()
 
     def close(self):

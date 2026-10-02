@@ -6,7 +6,7 @@ WeChat Auto is a local Windows WeChat 4.x / Weixin automation and conversation-m
 
 The goal is evidence-backed chat history analysis, monthly summaries, person and relationship timelines, incremental long-term agent memory and confirmed reply drafts. It provides foundations for an AI WeChat assistant and chatbot; the complete recipient-safe automatic reply workflow remains under development.
 
-**Project:** `0.5.2` · **Latest tested client:** Windows WeChat `4.1.15.9`, dark theme, 144 DPI · **Latest recorded tests:** 162 passed, 2026-10-01. Other versions, themes, DPI settings and page combinations require validation.
+**Project:** `0.8.1` · Windows WeChat 4.x · Local stdio MCP and repository Skills.
 
 ## Project overview
 
@@ -19,11 +19,28 @@ The goal is evidence-backed chat history analysis, monthly summaries, person and
 | WeChat Moments | Content/media metadata adapters and profile-change evidence; availability depends on the actual readable source |
 | Long-term memory | Short Claims, Events, evidence references, versions, dependencies and cursors in SQLite; complete current/historical Markdown summaries |
 | Analysis workflows | Monthly conversation jobs, cross-month summaries, long-running events, person/scenario analysis and incremental invalidation |
-| Agent integration | Local stdio MCP, task-specific context compression, on-demand evidence retrieval and 11 repository Skills |
+| Agent integration | Local stdio MCP, task-specific context compression, on-demand evidence retrieval and 12 repository Skills |
 | Reply assistance | Conversation-specific style/context, reply drafts and confirmation infrastructure; full recipient/status/result gates pending |
 | Visualization | Local offline HTML dashboard and PNG / Mermaid timeline export infrastructure |
 
 Implementation does not imply live-device certification. Person or relationship conclusions exist only after an external agent successfully submits an analysis version.
+
+**Contact and Moments collection:** local cache refresh plus a resumable, identity-checked
+per-contact album loading queue. Directional contact removal, blacklist/blocking,
+restoration and Moments access observations retain evidence history. Memory schema 3
+migrates from 1/2. Collection is limited by client visibility and supported controls;
+neither path guarantees complete server history. See [collection workflow](docs/CONTACT_COLLECTION.md).
+
+**Window navigation and recovery:** process-bound HWND inventory, layered page recognition,
+current-frame OpenCV/OCR targets and verified routes. Contact selection stays beneath the
+personal Contacts header, excluding New Friends and mixed search. Failed sidebar detection
+recalculates, then offers guarded Agent screenshot review through BasicSkill.
+See [window workflow](docs/WINDOW_NAVIGATION.md).
+
+Profile enrichment saves explicit signature, region, source and other visible fields,
+preserving earlier values when a field is missing. Exact local cache-media archiving and
+confirmed single-item remote downloads validate files and store BLOBs. These tools do
+not guarantee complete remote history. See [Moments archive](docs/MOMENTS_ARCHIVE.md).
 
 ## Architecture and storage
 
@@ -76,12 +93,11 @@ data/
 | Status | Scope |
 |---|---|
 | Implemented foundations | Read-only adapters, archives, media BLOBs, cursors, profile history, Claim/Event memory, Markdown versions, analysis jobs, context tools and draft confirmations |
-| Real-client samples | 16 page states; selected navigation, search → embedded right pane → close, resizing and adjusted-layout recognition |
 | Page catalog | 49 page types; enumeration does not mean all pages/actions are verified |
 | Integration pending | Stable recipient identity across search variants, missing/deleted-contact gates, full confirmation target binding and send-result verification (`WA-005`) |
 | Planned / partial workflows | Fully orchestrated automatic replies, comprehensive analysis templates, public-account information processing and broader action validation |
 
-See [live validation](docs/ACTION_VERIFICATION_MATRIX.md), [project state](docs/PROJECT_STATE.md) and the [roadmap](docs/FUTURE_TODO.md).
+See [action verification rules](docs/ACTION_VERIFICATION_MATRIX.md) and the [roadmap](docs/FUTURE_TODO.md).
 
 ### Recipient search and deleted contacts
 
@@ -93,13 +109,17 @@ The complete stable-identity send workflow remains `WA-005`. Existing open_chat,
 
 ### Dynamic layouts and OCR
 
+Navigation uses current-frame OpenCV icon matching; size-keyed coordinate profiles
+and fixed navigation/row/semantic fallbacks have been removed. See
+[dynamic controls](docs/DYNAMIC_UI_CONTROLS.md).
+
 OCR observes text and boxes; it never clicks. Traditional CV observes current dividers, search fields and input frames. BasicSkill delegates actions to the same HWND driver. Right-side content can coexist with the chat composer; closing a tab must not close the main client.
 
-Real screenshots exposed webpage-card edges resembling dividers. The detector now cross-checks against the composer's right edge. Arbitrary resizing and all page combinations are not certified. See the [OCR guide](docs/PAGE_OCR.md) and [page catalog](docs/UI_PAGE_CATALOG.md).
+The detector cross-checks dividers against the composer's right edge to distinguish content-card borders. Arbitrary resizing and all page combinations are not certified. See the [OCR guide](docs/PAGE_OCR.md) and [page catalog](docs/UI_PAGE_CATALOG.md).
 
 ## Getting started
 
-Use PowerShell from the repository root and a suitable Windows Python environment. The recorded interpreter is `python`. This is currently a src-directory project; set the import path rather than assuming an installable package.
+Use PowerShell from the repository root and a suitable Windows Python environment. This is currently a src-directory project; set the import path rather than assuming an installable package.
 
 ```powershell
 $env:PYTHONPATH = (Resolve-Path .\src).Path
@@ -123,6 +143,11 @@ python scripts\recognize_wechat_page.py --engine paddle --output data\ocr\latest
 The last two commands capture the current window without clicking or sending. Screenshots, OCR and HTML previews may contain private information and stay in data/.
 
 ### Initialize memory and start MCP
+
+To refresh all local non-group contact rows and their readable Moments in one
+offline run, use `python scripts\sync_all_contacts_moments.py`. It preserves old
+records and creates a private media manifest; it does not download media or prove
+current friendship. See [all-contact Moments refresh](docs/MOMENTS_ARCHIVE.md).
 
 Use actual existing project archive paths:
 
@@ -158,6 +183,7 @@ Tool areas: sync.*, entities.*, claims.*, events.*, analysis.*, memory.*, eviden
 | [wechat-dashboard](skills/wechat-dashboard/SKILL.md) | Offline visualization and exports |
 | [wechat-reply-monitor](skills/wechat-reply-monitor/SKILL.md) | One monitor cycle, bounded reply context and confirmation |
 | [wechat-identity-audit](skills/wechat-identity-audit/SKILL.md) | Stable identities, absence, restoration and merge review |
+| [wechat-ui-navigation](skills/wechat-ui-navigation/SKILL.md) | HWND/page selection, Contacts group, bounded recovery and guarded screenshot review |
 | [wechat-memory-rebuild](skills/wechat-memory-rebuild/SKILL.md) | Corrections and dependency-aware rebuilding |
 
 Skills are static Markdown instructions, not autonomous background services. Keep shared repository references available. Inferences need evidence and distinguish observed, confirmed, inferred and unknown; avatars/signatures alone do not justify psychological diagnoses or certain personality labels.
@@ -174,15 +200,14 @@ Use File Transfer Assistant for live checks. Opening a chat or preparing a draft
 
 Chat archives, media, screenshots, exports and secrets are private local artifacts. Protect secrets with Windows DPAPI under data/.secrets/; never commit or print them. The project does not claim Tencent endorsement or zero account-enforcement risk.
 
-Repository: src/wechat_auto/ (implementation), skills/ (instructions), scripts/ (tools), tests/ (regressions), docs/ (contracts/audits), data/ (ignored private artifacts).
+Repository: src/wechat_auto/ (MCP runtime and supporting implementation), skills/ (instructions), scripts/ (tools), tests/ (regressions), docs/ (contracts and guides), data/ (ignored private artifacts). Operational ledgers and diagnostic records stay local.
 
 ## Documentation
 
 - [Architecture](ARCHITECTURE.md) · [Development rules](AGENTS.md) · [Environment](CLAUDE.md)
 - [Shared UI / recipient contract](docs/UI_WORKFLOW_RULES.md)
 - [Page catalog](docs/UI_PAGE_CATALOG.md) · [OCR guide](docs/PAGE_OCR.md)
-- [Live validation](docs/ACTION_VERIFICATION_MATRIX.md)
-- [Project state](docs/PROJECT_STATE.md) · [History audit](docs/HISTORY_SOURCE_AUDIT.md)
+- [Action verification rules](docs/ACTION_VERIFICATION_MATRIX.md)
 - [Roadmap](docs/FUTURE_TODO.md) · [Search and realtime design](docs/SEARCH_AND_REALTIME_DESIGN.md)
 
 ## Keywords and topics

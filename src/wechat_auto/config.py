@@ -16,7 +16,6 @@ class WeChatConfig:
     # This library attaches to an already-running, logged-in client.  Starting
     # Weixin from an automation process can create a second client/session.
     auto_start: bool = False
-    page_layout_directory: str = "data/layouts"
     executable_path: str | None = None
     launch_wait_timeout: float = 15.0
 
@@ -84,10 +83,6 @@ class WeChatConfig:
     ocr_allow_rapid_fallback: bool = True
     paddle_detection_model: str = "PP-OCRv5_mobile_det"
     paddle_recognition_model: str = "PP-OCRv5_mobile_rec"
-
-    # Optional strict layout calibration.  When configured, fixed-coordinate
-    # actions stop if the captured window size differs from this profile.
-    layout_profile_path: str | None = None
 
     # Optional log level
     log_level: str = "INFO"

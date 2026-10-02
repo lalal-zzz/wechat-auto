@@ -6,7 +6,7 @@ WeChat Auto 是面向 **Windows 微信 4.x / Weixin** 的本地自动化与聊�
 
 目标是建立可追溯的聊天分析、月度总结、人物与关系时间线、增量长期记忆和回复草稿工作流。项目已有微信 AI 助手、聊天机器人和自动回复所需的部分基础设施；**完整的稳定收件人核验与自动回复发送链路仍在开发，不能视为无人值守自动聊天已经完成。**
 
-**项目版本：** `0.5.2`；**当前实测：** Windows 微信 `4.1.15.9`、深色、144 DPI。**最近测试记录：** 2026-10-01，162 项通过。其他版本、主题、DPI 和页面组合仍需验收。
+**项目版本：** `0.8.1`；支持 Windows 微信 4.x、本地 stdio MCP 与仓库 Skills。
 
 ## 项目总览
 
@@ -19,11 +19,25 @@ WeChat Auto 是面向 **Windows 微信 4.x / Weixin** 的本地自动化与聊�
 | 朋友圈与资料 | 朋友圈正文与媒体元数据适配、签名/头像/昵称变化证据；具体字段取决于可读来源 |
 | 长期 Memory | SQLite 保存短 Claim、Event、证据引用、依赖、水位；Markdown 保存完整摘要及历史版本 |
 | 分析流水线 | 会话逐月分析任务、跨月汇总、人物场景画像、关系与事件时间线、增量失效传播 |
-| Agent 与 MCP | 本地 stdio MCP、按任务裁剪上下文、按需展开证据、11 个仓库 Skills |
+| Agent 与 MCP | 本地 stdio MCP、按任务裁剪上下文、按需展开证据、12 个仓库 Skills |
 | 回复辅助 | 对象特定表达方式、紧凑上下文、草稿与逐次确认；完整身份/状态/结果门禁待贯通 |
 | 可视化 | 本地离线 HTML 仪表盘、PNG 与 Mermaid 时间线导出基础 |
 
 “已有实现”不表示全部场景通过实机验证。人物分析需要外部 Agent 成功提交分析版本，不能仅因创建了任务或目录就声称已完成人物画像。
+
+**联系人与朋友圈两路采集：** 本地缓存刷新，以及身份核验后的逐人相册加载队列。
+删除、拉黑/黑名单、恢复和朋友圈权限按方向保留证据历史，Memory schema 1/2
+增量迁移到 3。采集受客户端可见范围和已实现控件限制，两路都不保证服务器完整历史。
+命令、MCP、断点恢复与限制见[联系人两路采集](docs/CONTACT_COLLECTION.md)。
+
+**窗口导航与失败恢复：** 同进程 HWND 盘点、分层页面识别、当前帧 OpenCV/OCR
+定位、逐步后置验证。只在个人“联系人”分组下找人，排除“新的朋友”和全局混合搜索。
+侧栏定位失败先重算，再交给 Agent 看当前图片，由 BasicSkill 校验后执行。
+详见[窗口导航规则](docs/WINDOW_NAVIGATION.md)。
+
+资料补采在身份核验后保存明确可见的签名、地区、来源等字段，缺失不覆盖旧值。
+缓存媒体归档和单项确认下载提供格式校验与 BLOB 保存，不保证远程完整历史。
+详见[朋友圈归档说明](docs/MOMENTS_ARCHIVE.md)。
 
 ## 全链路架构与存储
 
@@ -76,12 +90,11 @@ data/
 | 状态 | 范围 |
 |---|---|
 | 已有基础实现 | 只读适配、归档、媒体 BLOB、同步游标、资料历史、Claim/Event、Markdown 版本、分析任务、上下文工具与草稿确认 |
-| 已有实机采样 | 16 类页面状态、部分导航、搜索→主窗右侧内容→关闭、窗口缩放与内部宽度调整后的识别 |
 | 已枚举页面 | 49 类：聊天、通讯录、资料、菜单、编辑器、朋友圈、视频号、搜索、小程序及独立窗口；枚举不等于全部验收 |
 | 正在贯通 | 不同搜索状态下稳定身份定位、消失联系人发送门禁、确认目标完整绑定、发送结果核验（WA-005） |
 | 规划或部分实现 | 自动回复完整编排、全面人物分析模板、公众号信息处理与更多实机动作 |
 
-完整记录见[实机验收矩阵](docs/ACTION_VERIFICATION_MATRIX.md)、[项目状态](docs/PROJECT_STATE.md)和[开发路线图](docs/FUTURE_TODO.md)。
+接口验收规则见[动作验证矩阵](docs/ACTION_VERIFICATION_MATRIX.md)，后续工作见[开发路线图](docs/FUTURE_TODO.md)。
 
 ### 找联系人、删除状态与发送
 
@@ -93,13 +106,16 @@ data/
 
 ### 页面识别与动态布局
 
+导航由当前截图 OpenCV 识别图标并给出坐标，已移除尺寸坐标档案和固定导航/行号/
+语义坐标回退。实现说明见[当前帧控件定位](docs/DYNAMIC_UI_CONTROLS.md)。
+
 OCR 只输出文字和框，不能操作窗口；传统 CV 观察分隔线、搜索框和输入区，动作仍由 BasicSkill 交给同一个 HWND 驱动。右侧搜一搜等内容可以和聊天输入区同时存在，关闭嵌入标签不能关闭微信主窗口。
 
-实测发现网页卡片长边容易被误当成分隔线，已用聊天输入框右边缘辅助确认。这不代表任意窗口大小、所有拖动布局都已通过验证。详见[页面 OCR 说明](docs/PAGE_OCR.md)及[页面目录](docs/UI_PAGE_CATALOG.md)。
+分隔线检测使用聊天输入框右边缘辅助确认，区分网页卡片与窗口布局。这不代表任意窗口大小、所有拖动布局都已通过验证。详见[页面 OCR 说明](docs/PAGE_OCR.md)及[页面目录](docs/UI_PAGE_CATALOG.md)。
 
 ## 开始使用
 
-在仓库根目录使用 PowerShell 和合适的 Windows Python 环境。当前记录的开发/测试解释器是 `python`。仓库使用 src 布局，下面显式设置导入路径，不假定已经提供可安装的 Python 包。
+在仓库根目录使用 PowerShell 和合适的 Windows Python 环境。仓库使用 src 布局，下面显式设置导入路径，不假定已经提供可安装的 Python 包。
 
 ```powershell
 $env:PYTHONPATH = (Resolve-Path .\src).Path
@@ -123,6 +139,10 @@ python scripts\recognize_wechat_page.py --engine paddle --output data\ocr\latest
 后两条只截取当前微信窗口，不点击、不发送。截图、OCR 文字和本地 HTML 预览可能包含私人信息，只留在 data/。
 
 ### 初始化 Memory 与启动 MCP
+
+所有本地非群联系人和可读朋友圈的一次离线刷新可运行
+`python scripts\sync_all_contacts_moments.py`，保留旧记录并生成私人媒体清单，
+不下载媒体、不证明当前好友关系。详见[全联系人朋友圈刷新](docs/MOMENTS_ARCHIVE.md)。
 
 路径替换为实际存在的项目归档：
 
@@ -158,6 +178,7 @@ python -m wechat_auto.mcp_server `
 | [wechat-dashboard](skills/wechat-dashboard/SKILL.md) | 离线仪表盘与图表导出 |
 | [wechat-reply-monitor](skills/wechat-reply-monitor/SKILL.md) | 单次监听、回复上下文与确认规则 |
 | [wechat-identity-audit](skills/wechat-identity-audit/SKILL.md) | 稳定身份、缺席、恢复和合并审查 |
+| [wechat-ui-navigation](skills/wechat-ui-navigation/SKILL.md) | HWND/页面选择、个人联系人分组、有界恢复、受限图片复核 |
 | [wechat-memory-rebuild](skills/wechat-memory-rebuild/SKILL.md) | 用户修正、依赖失效与重建 |
 
 Skills 是静态 Markdown 指令，不会自己变成后台服务；共用引用文件要随仓库提供。分析必须保留证据，区分 observed、confirmed、inferred、unknown；不能仅凭头像、签名或单条朋友圈断言人格、心理状态或进行心理疾病诊断。
@@ -174,15 +195,14 @@ python -m pytest tests -q
 
 聊天数据库、媒体、截图、导出和密钥是本机私人数据，不提交或公开输出。密钥存于 DPAPI 保护的 data/.secrets/。项目不声称腾讯官方授权或“零封号风险”。
 
-仓库目录：src/wechat_auto/ 实现、skills/ Agent 指令、scripts/ 本地工具、tests/ 回归、docs/ 规则与审计、data/ 被忽略的私人数据。
+仓库目录：src/wechat_auto/ MCP 与必要运行实现、skills/ Agent 指令、scripts/ 本地工具、tests/ 回归、docs/ 接口规则与使用说明、data/ 被忽略的私人数据。运行流水与诊断记录仅留本机。
 
 ## 文档导航
 
 - [架构](ARCHITECTURE.md) · [开发约束](AGENTS.md) · [环境说明](CLAUDE.md)
 - [共用页面与收件人规则](docs/UI_WORKFLOW_RULES.md)
 - [页面识别目录](docs/UI_PAGE_CATALOG.md) · [OCR 使用说明](docs/PAGE_OCR.md)
-- [实机动作验收](docs/ACTION_VERIFICATION_MATRIX.md)
-- [项目状态](docs/PROJECT_STATE.md) · [历史来源审计](docs/HISTORY_SOURCE_AUDIT.md)
+- [动作验证规则](docs/ACTION_VERIFICATION_MATRIX.md)
 - [开发路线图](docs/FUTURE_TODO.md) · [搜索与实时消息设计](docs/SEARCH_AND_REALTIME_DESIGN.md)
 
 ## 关键词与检索主题

@@ -16,7 +16,7 @@
 
 ## 安装与运行
 
-已实测 PaddleOCR 3.7.0、PaddlePaddle CPU 3.3.1，模型为 `PP-OCRv5_mobile_det` 和 `PP-OCRv5_mobile_rec`。本机模型已下载到 `<local-path>`。Windows CPU 关闭 MKL-DNN，RGB 截图转换为 Paddle 的 BGR ndarray。
+OCR 配置使用 PaddleOCR 与 PaddlePaddle CPU，模型为 `PP-OCRv5_mobile_det` 和 `PP-OCRv5_mobile_rec`，模型由本机缓存管理。Windows CPU 关闭 MKL-DNN，RGB 截图转换为 Paddle 的 BGR ndarray。
 
 ```powershell
 python -m pip install -r requirements-ocr.txt
@@ -53,22 +53,11 @@ python scripts\recognize_wechat_page.py --geometry-only --output data\ocr\geomet
 
 `VisionAutomation.observe_page(include_ocr=True)` 返回单帧观察；真实运行时 MCP 条件注册 `vision.observe_page`。传入 false 时只执行传统 CV，不加载模型。截图失败返回 `window_capture_unavailable`，OCR 推理失败返回 `ocr_infrastructure_failure` 和异常类型。命令行严格执行所选 OCR 引擎，错误以失败退出，不能把失败解释为无聊天框。
 
-## 验收状态
+## 窗口与动作规则
 
-2026-09-30：Paddle mobile 模型在微信 4.1.15.9、深色、144 DPI 上完成实际截图推理。
-现有实际公共控件回归样例覆盖通讯录、资料、菜单、编辑/权限弹窗、发现、朋友圈、
-视频号、搜一搜、小程序列表、设置、文件传输助手、搜索建议及聊天。
-原图和完整 OCR 存在 data/ui_audit，不提交。
-
-已实机跑通主搜索框→精确网络建议→右侧搜一搜标签→关闭标签保留聊天。
-右侧标签栏的点击必须路由到嵌入 Chrome_WidgetWin_0，不能只对主 HWND 发消息。
-短/长标签的关闭叉号用传统 CV 在当前截图中检测，不按标题末尾固定偏移点击。
-观察器版本为 4；right_panel.tabs 含类型、标题框索引与唯一 close_candidate。
-
-详细环境、成功/失败路径和剩余验收见 [ACTION_VERIFICATION_MATRIX.md](ACTION_VERIFICATION_MATRIX.md)。
-49 类目录不是全部已通过实机验收；多标签、文章/视频详情、群资料、浅色和其他 DPI 等仍待测试。
-2026-10-01 用户调整窗口和内部宽度后的真实截图识别通过；右栏边界以输入框
-右边缘交叉确认，避免误选网页内部卡片边缘。该布局尚未执行点击验收。
+右侧标签栏操作路由到嵌入窗口，不能用关闭主窗代替关闭标签。
+关闭叉号从当前帧 CV 检测；页面观察器版本为 5。目录与动作支持范围见
+[UI_PAGE_CATALOG.md](UI_PAGE_CATALOG.md)、[ACTION_VERIFICATION_MATRIX.md](ACTION_VERIFICATION_MATRIX.md)。
 
 ## 实机审计入口
 

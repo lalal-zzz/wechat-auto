@@ -6,7 +6,7 @@ from dataclasses import asdict, dataclass
 
 from wechat_auto.primitives.page_catalog import PAGES
 
-PAGE_ACTION_VERSION = 1
+PAGE_ACTION_VERSION = 4
 
 
 @dataclass(frozen=True)
@@ -14,7 +14,7 @@ class PageOperation:
     name: str
     sources: tuple[str, ...]
     targets: tuple[str, ...] = ()
-    method: str = "calibrated_point"
+    method: str = "visual_control"
     anchors: tuple[str, ...] = ()
     confirmation_required: bool = False
     executable: bool = True
@@ -25,7 +25,7 @@ MAIN_PAGES = ("chat", "group_chat", "file_transfer", "contacts", "contact_profil
               "discover", "moments_feed", "channels", "web_search", "mini_program_list",
               "official_accounts", "favorites", "new_friends", "main_without_selected_chat")
 OPERATIONS = (
-    PageOperation("open_contacts", MAIN_PAGES, ("contacts", "contact_profile")),
+    PageOperation("open_contacts", MAIN_PAGES, ("contacts", "contact_profile", "new_friends")),
     PageOperation("open_chats", MAIN_PAGES, ("chat", "group_chat", "file_transfer", "main_without_selected_chat")),
     PageOperation("open_discover", MAIN_PAGES, ("discover", "moments_feed", "channels", "web_search", "mini_program_list")),
     PageOperation("open_main_menu", MAIN_PAGES, ("main_menu",)),
@@ -38,6 +38,8 @@ OPERATIONS = (
     PageOperation("open_mini_programs", ("discover", "moments_feed", "channels", "web_search"),
                   ("mini_program_list",), "ocr", ("小程序",)),
     PageOperation("open_contact_more", ("contact_profile",), ("contact_more",)),
+    PageOperation("open_contact_moments", ("contact_profile",), ("moments_person",),
+                  "ocr", ("朋友圈", "相册")),
     PageOperation("open_remark_editor", ("contact_more",), ("contact_remark",), "ocr", ("设置备注和标签",)),
     PageOperation("open_permissions", ("contact_more",), ("contact_permissions",), "ocr", ("设置朋友权限",)),
     PageOperation("open_settings", ("main_menu",), ("settings",), "ocr", ("设置",)),
@@ -105,12 +107,12 @@ def list_page_capabilities() -> dict:
          "confirmed_mutations": [{"name": name, "confirmation_required": True,
                                    "page_executor_enabled": False}
                                   for name in MUTATIONS.get(spec.key, ())],
-         "observation_available": True, "coordinates_require_matching_profile": True}
+         "observation_available": True, "coordinates_from_current_frame": True}
         for spec in PAGES]}
 
 
 def plan_page_route(source: str, target: str) -> list[str]:
-    """Shortest declared route. Runtime still verifies/calibrates every step."""
+    """Shortest declared route. Runtime still observes and verifies every step."""
     known = {spec.key for spec in PAGES}
     if source not in known or target not in known:
         raise ValueError("Unknown source or target page")

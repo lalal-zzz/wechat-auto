@@ -23,7 +23,7 @@ Or dispatch a primitive HWND action::
     agent.router.route("basic_action", {"action": "open_chat", "contact": "文件传输助手"})
 """
 
-from wechat_auto.actions.basic import BasicLayout, BasicSkill
+from wechat_auto.actions.basic import BasicSkill
 from wechat_auto.config import SessionConfig, WeChatConfig
 from wechat_auto.engine.loop import AgentLoop
 from wechat_auto.exceptions import (
@@ -37,7 +37,6 @@ from wechat_auto.version import __version__
 __all__ = [
     # Main entry point
     "AgentLoop",
-    "BasicLayout",
     "BasicSkill",
     "ChatNotFoundError",
     "SessionConfig",

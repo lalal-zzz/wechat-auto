@@ -156,6 +156,7 @@ class ArchiveIndexer:
                 person_id = self.store.ensure_person(
                     str(row["wechat_id"]), person_type=str(row["profile_type"]),
                     source=str(row["source"] or "profile_archive"), seen_at=str(row["captured_at"]),
+                    mark_active=False,
                 )
                 ref = str(row["snapshot_id"])
                 digest = hashlib.sha256(str(row["profile_json"]).encode("utf-8", "surrogatepass")).hexdigest()

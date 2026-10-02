@@ -2,7 +2,7 @@ from unittest.mock import patch
 
 import pytest
 
-from wechat_auto.primitives.keyboard_only import KeyboardOnlyDriver, KeyboardOnlyLayout
+from wechat_auto.primitives.keyboard_only import KeyboardOnlyDriver
 
 
 def test_unicode_units_and_control_rejection():
@@ -75,27 +75,6 @@ def test_missing_embedded_hwnd_never_falls_back_to_main_click():
         driver.click_content_fraction(.8, .1)
     api.SendMessageW.assert_not_called()
 
-
-def test_layout_can_be_calibrated_without_visual_dependencies():
-    layout = KeyboardOnlyLayout(search_x=0.2, search_y=0.1, input_x=0.7, input_y=0.8)
-    driver = KeyboardOnlyDriver(_FakeApplication(), layout)
-    driver._rect = lambda: (0, 0, 1000, 1000)
-
-    assert driver.point(layout.search_x, layout.search_y) == (200, 100)
-    assert driver.point(layout.input_x, layout.input_y) == (700, 800)
-
-
-def test_layout_can_be_calibrated_from_screen_points(tmp_path):
-    layout = KeyboardOnlyLayout.from_screen_points(
-        (100, 200, 1100, 900),
-        search=(278, 259),
-        input_box=(760, 795),
-    )
-    path = tmp_path / "keyboard-layout.json"
-    layout.save(str(path))
-    loaded = KeyboardOnlyLayout.load(str(path))
-
-    assert loaded == layout
 
 
 def test_search_mode_is_explicit():

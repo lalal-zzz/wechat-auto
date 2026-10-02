@@ -1,0 +1,4 @@
+interface:
+  display_name: "WeChat UI navigation"
+  short_description: "Recognize windows and navigate verified WeChat pages"
+  default_prompt: "Use $wechat-ui-navigation to inspect WeChat windows and navigate to a known page, verifying every transition."

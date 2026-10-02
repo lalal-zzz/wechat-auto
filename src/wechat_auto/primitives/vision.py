@@ -497,6 +497,9 @@ class VisionAutomation:
 
         state = classify_page(boxes, image.size, geometry=observe_geometry(image))
         observe_tab_closes(image, boxes, state)
+        if state['page'] in {'contacts', 'contact_profile', 'new_friends'}:
+            from wechat_auto.primitives.contact_section import observe_contact_section
+            state['contact_section'] = observe_contact_section(image, boxes, state)
         return {"ok": True, "engine": self._ocr.name if include_ocr else "geometry_only",
                 "boxes": boxes, "state": state}
 

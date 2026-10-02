@@ -102,6 +102,7 @@ class ProfileStore:
             "name", "nickname", "remark", "signature", "alias", "original_name",
             "display_name", "nickname_prefix", "nickname_core", "nickname_suffix",
             "group_id", "group_display_name", "avatar", "avatar_md5", "background_image",
+            "region", "gender", "contact_source", "added_at", "common_groups", "tags",
         )
         current = self.get(wechat_id, profile_type=profile_type)
         changed = []
@@ -167,7 +168,38 @@ class ProfileStore:
                 "background_image", "raw", "updated_at")
         result = dict(zip(keys, row))
         result["raw"] = json.loads(result["raw"])
+        for field, observation in result['raw'].get('ui_fields', {}).items():
+            if field not in result:
+                result[field] = observation['value']
         return result
+
+    def record_ui_observation(self, wechat_id: str, fields: dict, *, evidence_ref: str) -> dict:
+        """Merge explicit verified fields; missing fields never erase old values."""
+        from wechat_auto.primitives.profile_fields import LABELS
+
+        current = self.get(wechat_id)
+        if current is None:
+            raise ValueError('Archive the stable base profile before UI enrichment')
+        if not evidence_ref or set(fields) - set(LABELS.values()):
+            raise ValueError('Recognized fields and local evidence reference required')
+        profile = {k: v for k, v in current.items() if k not in {'updated_at', 'profile_type'}}
+        raw = dict(profile.get('raw', {}))
+        observations = dict(raw.get('ui_fields', {}))
+        changed = []
+        for field, value in fields.items():
+            if not isinstance(value, str) or not value.strip():
+                raise ValueError('Empty OCR values cannot prove a cleared field')
+            if current.get(field) != value or field not in observations:
+                changed.append(field)
+                observations[field] = {'value': value, 'source': 'verified_profile_ocr',
+                                       'evidence_ref': evidence_ref, 'status': 'observed'}
+                profile[field] = value
+        if not changed:
+            return {'changed_fields': [], 'snapshot_created': False}
+        raw['ui_fields'] = observations
+        profile.update(raw=raw, source='verified_profile_ocr')
+        result = self.save(profile, profile_type='contact')
+        return {**result, 'changed_fields': changed, 'snapshot_created': True}
 
     def history(self, wechat_id: str, *, profile_type: str = "contact", limit: int = 100) -> list[dict]:
         if limit <= 0:

@@ -2,7 +2,7 @@
 
 Weixin 4.x may expose only a canvas-like UIA shell.  This module deliberately
 does not import UIA, OCR, screenshots, or process-memory helpers.  It uses the
-normal foreground window, clipboard paste, and a small set of layout anchors.
+normal foreground window, clipboard paste, and caller-observed current-frame coordinates.
 
 The send operation is opt-in: ``send_text(..., confirm=True)`` is required to
 press Enter.  The default only prepares a draft, which makes calibration and
@@ -13,11 +13,9 @@ from __future__ import annotations
 
 import ctypes
 import ctypes.wintypes as wt
-import json
 import time
 from collections.abc import Iterator
 from contextlib import contextmanager
-from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from wechat_auto.utils.clipboard import ClipboardHelper
@@ -64,69 +62,18 @@ class _GuiThreadInfo(ctypes.Structure):
     ]
 
 
-@dataclass(frozen=True)
-class KeyboardOnlyLayout:
-    """Fractional anchors measured from the complete top-level window."""
-
-    # Center of the left search box on the supported Weixin 4.x wide layout.
-    # The former .178 anchor lands near its edge on a three-column window.
-    search_x: float = 0.140
-    search_y: float = 0.084
-    input_x: float = 0.660
-    input_y: float = 0.850
-
-    @classmethod
-    def from_screen_points(
-        cls,
-        rect: tuple[int, int, int, int],
-        search: tuple[int, int],
-        input_box: tuple[int, int],
-    ) -> KeyboardOnlyLayout:
-        """Create anchors from two user-supplied screen points.
-
-        This is manual calibration: no screenshot, OCR, or UIA inspection is
-        performed.  The resulting fractions remain usable after moving or
-        resizing the window.
-        """
-        left, top, right, bottom = rect
-        width = right - left
-        height = bottom - top
-        if width <= 0 or height <= 0:
-            raise ValueError("window rect must have positive width and height")
-        return cls(
-            search_x=(search[0] - left) / width,
-            search_y=(search[1] - top) / height,
-            input_x=(input_box[0] - left) / width,
-            input_y=(input_box[1] - top) / height,
-        )
-
-    def save(self, path: str) -> None:
-        with open(path, "w", encoding="utf-8") as stream:
-            json.dump(self.__dict__, stream, ensure_ascii=False, indent=2)
-
-    @classmethod
-    def load(cls, path: str) -> KeyboardOnlyLayout:
-        with open(path, "r", encoding="utf-8") as stream:
-            values = json.load(stream)
-        return cls(**{key: float(values[key]) for key in (
-            "search_x", "search_y", "input_x", "input_y"
-        )})
-
-
 class KeyboardOnlyDriver:
     """Drive the self-drawn client without UIA or visual recognition."""
 
     def __init__(
         self,
         application: Application,
-        layout: KeyboardOnlyLayout | None = None,
         search_mode: str = "click",
         input_mode: str = "wmchar",
         auto_activate: bool = True,
         foreground_mode: str | None = None,
     ):
         self.application = application
-        self.layout = layout or KeyboardOnlyLayout()
         if search_mode not in {"click", "shortcut"}:
             raise ValueError("search_mode must be 'click' or 'shortcut'")
         if input_mode not in {"winmsg", "wmchar"}:
@@ -241,7 +188,10 @@ class KeyboardOnlyDriver:
         # the click, especially when Weixin is not the foreground window.
         for message, wparam in ((WM_MOUSEMOVE, 0), (WM_LBUTTONDOWN, MK_LBUTTON),
                                 (WM_LBUTTONUP, 0)):
+            ctypes.windll.kernel32.SetLastError(0)
             user32.SendMessageW(hwnd, message, wparam, lparam)
+            if ctypes.windll.kernel32.GetLastError() == 5:
+                raise PermissionError('Windows rejected HWND messages: check client/process integrity levels')
 
     def _right_click_window_fraction(self, fx: float, fy: float) -> None:
         """Send a right click to a client point without moving the cursor."""
@@ -343,26 +293,12 @@ class KeyboardOnlyDriver:
                 raise RuntimeError("PostMessageW(WM_MOUSEWHEEL) failed")
             self._settle_ui()
 
-    def click_search(self) -> None:
-        with self.foreground_lease():
-            self._click_window_fraction(self.layout.search_x, self.layout.search_y)
-            self._settle_ui()
-
-    def focus_search(self) -> None:
-        """Focus Weixin's left search box using the configured safe route."""
-        if self.search_mode == "shortcut":
-            with self.foreground_lease():
-                self._wm_chord(VK_F)
-                self._settle_ui()
-            return
-        self.click_search()
-
     def click_window_fraction(self, fx: float, fy: float) -> None:
-        """Click a calibrated self-drawn location through ``WM_LBUTTON*``.
+        """Click a caller-observed self-drawn location through ``WM_LBUTTON*``.
 
         This is for controls such as a user's sticker-grid cell where WeChat
-        exposes no UIA element.  The caller must supply a verified layout
-        anchor; this driver deliberately does not guess a sticker identity.
+        exposes no UIA element.  The caller must supply a verified current-frame
+        point; this driver deliberately does not guess a sticker identity.
         """
         if not 0.0 <= fx <= 1.0 or not 0.0 <= fy <= 1.0:
             raise ValueError("click coordinates must be window fractions")
@@ -411,7 +347,7 @@ class KeyboardOnlyDriver:
             self._settle_ui()
 
     def right_click_window_fraction(self, fx: float, fy: float) -> None:
-        """Right-click a calibrated point through ``WM_RBUTTON*``."""
+        """Right-click a current-frame point through ``WM_RBUTTON*``."""
         if not 0.0 <= fx <= 1.0 or not 0.0 <= fy <= 1.0:
             raise ValueError("click coordinates must be window fractions")
         with self.foreground_lease():
@@ -435,42 +371,3 @@ class KeyboardOnlyDriver:
         if not user32.PostMessageW(self.application.handle, WM_CLOSE, 0, 0):
             raise RuntimeError("PostMessageW(WM_CLOSE) failed")
         self._settle_ui()
-
-    def click_input(self) -> None:
-        with self.foreground_lease():
-            self._click_window_fraction(self.layout.input_x, self.layout.input_y)
-            self._settle_ui()
-
-    def prepare_chat_search(self, contact: str, settle: float = 1.2) -> None:
-        """Populate search, but never press Enter or choose a result."""
-        if not contact:
-            raise ValueError("contact must not be empty")
-        with self.foreground_lease():
-            self.focus_search()
-            self._select_all_clear()
-            self._type_text(contact)
-            time.sleep(max(0.0, settle))
-
-    def open_chat(self, contact: str, settle: float = 1.2) -> None:
-        """Compatibility alias for safe search preparation.
-
-        Selection belongs to ``BasicSkill`` after it verifies that the query
-        really reached a Weixin search surface.  This method intentionally
-        never presses Enter: an unverified focus can otherwise send the query
-        text as a real chat message.
-        """
-        self.prepare_chat_search(contact, settle=settle)
-
-    def prepare_draft(self, contact: str, message: str, settle: float = 1.2) -> None:
-        """Open a chat and place text in its input box; never sends it."""
-        self.open_chat(contact, settle=settle)
-        self.click_input()
-        self._type_text(message)
-
-    def send_text(self, contact: str, message: str, *, confirm: bool = False,
-                  settle: float = 1.2) -> None:
-        """Send through normal input only when the caller explicitly confirms."""
-        self.prepare_draft(contact, message, settle=settle)
-        if not confirm:
-            return
-        self._enter()

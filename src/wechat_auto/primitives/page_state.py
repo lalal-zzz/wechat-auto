@@ -158,7 +158,7 @@ def classify_page(boxes: list[dict], size: tuple[int, int], *,
     if any(m["key"] == "moments_comment" for m in catalog_matches):
         composer_role = "moments_comment_candidate"
     return {
-        "observer_version": 4, "catalog_version": PAGE_CATALOG_VERSION,
+        "observer_version": 5, "catalog_version": PAGE_CATALOG_VERSION,
         "page": page, "page_id": page_id, "geometry": geometry,
         "page_candidates": base_candidates,
         "overlays": [m for m in catalog_matches if m["layer"] == "overlay"],
@@ -180,5 +180,5 @@ def classify_page(boxes: list[dict], size: tuple[int, int], *,
         "action_authorized": False,
         "limitations": ["OCR anchors are observations, not verified UI controls.",
                         "Missing text does not prove that a panel or empty input is absent.",
-                        "Unknown layouts require calibration or additional visual evidence."],
+                        "Unknown layouts require fresh visual evidence or a guarded Agent review."],
     }

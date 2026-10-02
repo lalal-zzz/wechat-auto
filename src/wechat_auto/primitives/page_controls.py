@@ -2,6 +2,67 @@
 from __future__ import annotations
 
 
+class NavigationControlError(RuntimeError):
+    """A current-frame navigation control could not be uniquely located."""
+
+
+def find_navigation_control(image, operation: str) -> dict:
+    """Match a public icon in the current sidebar, independent of window size.
+
+    Templates encode glyph shapes, never button coordinates. Restrict matching
+    to the sidebar measured from this image and reject competing spatial peaks.
+    """
+    import cv2
+    import numpy as np
+
+    from wechat_auto.primitives.navigation_templates import TEMPLATES
+    from wechat_auto.primitives.page_geometry import observe_geometry
+    if operation not in TEMPLATES:
+        raise NavigationControlError('Visual control detector is not implemented for this operation')
+    width, height = image.size
+    geometry = observe_geometry(image)
+    boundaries = [s['x'] for s in geometry['vertical_separators'] if 35 < s['x'] < width * .15]
+    if not boundaries:
+        raise NavigationControlError('Current sidebar boundary is not detected')
+    right = min(boundaries)
+    rgb = np.asarray(image.convert('RGB'))[:, :right]
+    gray = rgb.mean(axis=2)
+    mask = np.uint8(np.abs(gray - np.median(gray)) > 32)
+    red = (rgb[:, :, 0].astype(float) > rgb[:, :, 1] * 1.4) & (rgb[:, :, 0].astype(float) > rgb[:, :, 2] * 1.4)
+    mask[red] = 0
+    template = np.array([[int(v) for v in row] for row in TEMPLATES[operation]], dtype=np.uint8)
+    # Selection may fill an icon which is outlined when inactive. Compare
+    # silhouettes so color/fill state does not change the semantic target.
+    def silhouette(binary):
+        contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        result = np.zeros_like(binary)
+        cv2.drawContours(result, contours, -1, 1, cv2.FILLED)
+        return result
+    mask, template = silhouette(mask), silhouette(template)
+    candidates = []
+    for scale in np.linspace(.65, 1.6, 39):
+        tw, th = round(template.shape[1] * scale), round(template.shape[0] * scale)
+        if tw >= right or th >= height:
+            continue
+        glyph = cv2.resize(template, (tw, th), interpolation=cv2.INTER_NEAREST_EXACT)
+        scores = cv2.matchTemplate(mask, glyph, cv2.TM_CCOEFF_NORMED)
+        ys, xs = np.where(scores >= .80)
+        for x, y in zip(xs, ys, strict=True):
+            candidates.append({'x': float(x + tw / 2), 'y': float(y + th / 2),
+                               'score': float(scores[y, x]), 'w': tw, 'h': th})
+    candidates.sort(key=lambda c: c['score'], reverse=True)
+    unique = []
+    for c in candidates:
+        if not any(abs(c['x'] - p['x']) < max(c['w'], p['w']) * .6
+                   and abs(c['y'] - p['y']) < max(c['h'], p['h']) * .6 for p in unique):
+            unique.append(c)
+    if len(unique) != 1:
+        raise NavigationControlError('Current navigation glyph absent or ambiguous')
+    c = unique[0]
+    return {**c, 'window_fraction': [c['x'] / width, c['y'] / height],
+            'method': 'opencv_multiscale_glyph', 'frame_size': [width, height]}
+
+
 def find_search_clear(image, field: dict) -> list[tuple[int, int]]:
     import cv2
     import numpy as np

@@ -15,14 +15,15 @@ def test_memory_store_rejects_incompatible_schema(tmp_path):
         MemoryStore(path)
 
 
-def test_memory_store_migrates_v1_to_v2_without_losing_existing_rows(tmp_path):
+@pytest.mark.parametrize('old_version', [1, 2])
+def test_memory_store_migrates_to_v3_without_losing_existing_rows(tmp_path, old_version):
     path = tmp_path / "memory.sqlite3"
     with MemoryStore(path) as store:
         person = store.ensure_person("wxid_test_friend")
-        store._connection.execute("UPDATE schema_meta SET value='1' WHERE key='schema_version'")
+        store._connection.execute("UPDATE schema_meta SET value=? WHERE key='schema_version'", (str(old_version),))
         store._connection.commit()
     with MemoryStore(path) as migrated:
-        assert migrated.schema_version == 2
+        assert migrated.schema_version == 3
         assert migrated.database_summary()["people"] == 1
         assert migrated._connection.execute(
             "SELECT person_id FROM people WHERE person_id=?", (person,)

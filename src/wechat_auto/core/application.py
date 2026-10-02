@@ -25,6 +25,7 @@ class Application:
     def __init__(self, config: WeChatConfig | None = None):
         self._config = config or WeChatConfig()
         self._hwnd: int | None = None
+        self._connected_pid: int | None = None
 
     @property
     def config(self) -> WeChatConfig:
@@ -50,12 +51,20 @@ class Application:
         if hwnd is None:
             raise WeChatNotRunningError("Cannot find logged-in Weixin 4.x top-level window")
         self._hwnd = int(hwnd)
+        self._connected_pid = self.window_process_id(self._hwnd)
         self.ensure_interactable()
         logger.info("Connected to WeChat HWND %d", self._hwnd)
         return self
 
     def disconnect(self) -> None:
         self._hwnd = None
+        self._connected_pid = None
+
+    def _expected_process_id(self) -> int:
+        current = self.window_process_id(self.handle)
+        if self._connected_pid is not None and current != self._connected_pid:
+            raise PermissionError('Connected HWND was reused by another process; reconnect required')
+        return current
 
     @staticmethod
     def window_process_id(hwnd: int) -> int:
@@ -69,7 +78,7 @@ class Application:
 
     def list_windows(self) -> list[dict]:
         """Visible top-level windows in the connected client process, without titles."""
-        pid = self.window_process_id(self.handle)
+        pid = self._expected_process_id()
         rows = []
 
         def collect(hwnd, _param):
@@ -80,31 +89,54 @@ class Application:
                     return True
             except RuntimeError:
                 return True  # Window disappeared during enumeration.
-            rect = wt.RECT()
-            user32.GetWindowRect(hwnd, ctypes.byref(rect))
-            cls = ctypes.create_unicode_buffer(256)
-            user32.GetClassNameW(hwnd, cls, 256)
-            rows.append({"hwnd": int(hwnd), "pid": pid, "class": cls.value,
-                         "width": rect.right - rect.left, "height": rect.bottom - rect.top,
-                         "is_main": int(hwnd) == self.handle})
+            try:
+                rows.append(self.describe_window(int(hwnd)))
+            except (RuntimeError, PermissionError):
+                pass  # The HWND may disappear or be reused during enumeration.
             return True
 
         user32.EnumWindows(WNDENUMPROC(collect), 0)
         return rows
 
+    def describe_window(self, hwnd: int) -> dict:
+        """Read only public Win32 topology and geometry; never return window titles."""
+        pid = self._expected_process_id()
+        if self.window_process_id(hwnd) != pid:
+            raise PermissionError("Window does not belong to the connected Weixin process")
+        rect, client = wt.RECT(), wt.RECT()
+        if not user32.GetWindowRect(hwnd, ctypes.byref(rect)) or not user32.GetClientRect(hwnd, ctypes.byref(client)):
+            raise RuntimeError("Window geometry is unavailable")
+        origin = wt.POINT(client.left, client.top)
+        if not user32.ClientToScreen(hwnd, ctypes.byref(origin)):
+            raise RuntimeError("Client origin is unavailable")
+        cls = ctypes.create_unicode_buffer(256)
+        user32.GetClassNameW(hwnd, cls, 256)
+        return {"hwnd": int(hwnd), "pid": pid, "class": cls.value,
+                "width": rect.right - rect.left, "height": rect.bottom - rect.top,
+                "rect": [rect.left, rect.top, rect.right, rect.bottom],
+                "client_rect": [origin.x, origin.y, origin.x + client.right - client.left,
+                                origin.y + client.bottom - client.top],
+                "owner_hwnd": int(user32.GetWindow(hwnd, 4) or 0),
+                "dpi": int(user32.GetDpiForWindow(hwnd)),
+                "visible": bool(user32.IsWindowVisible(hwnd)),
+                "enabled": bool(user32.IsWindowEnabled(hwnd)),
+                "minimized": bool(user32.IsIconic(hwnd)),
+                "is_main": int(hwnd) == self.handle}
+
     def for_window(self, hwnd: int) -> Application:
         """Bind an auxiliary HWND only after checking the connected process."""
-        if self.window_process_id(hwnd) != self.window_process_id(self.handle):
+        if self.window_process_id(hwnd) != self._expected_process_id():
             raise PermissionError("Target window does not belong to the connected Weixin process")
         bound = Application(self.config)
         bound._hwnd = int(hwnd)
+        bound._connected_pid = self._expected_process_id()
         return bound
 
     def window_metadata(self) -> dict:
         """Read dimensions, DPI and executable file version through Win32."""
         import win32api
 
-        pid = self.window_process_id(self.handle)
+        pid = self._expected_process_id()
         kernel32.OpenProcess.argtypes = [wt.DWORD, wt.BOOL, wt.DWORD]
         kernel32.OpenProcess.restype = wt.HANDLE
         process = kernel32.OpenProcess(0x1000, False, pid)
@@ -222,8 +254,8 @@ class Application:
 
     def _find_executable(self) -> str | None:
         candidates = [
-            r"D:\software\微信\Weixin\Weixin.exe",
-            os.path.join(os.environ.get("PROGRAMFILES", ""), "Tencent", "Weixin", "Weixin.exe"),
-            os.path.join(os.environ.get("PROGRAMFILES(X86)", ""), "Tencent", "Weixin", "Weixin.exe"),
+            os.path.join(root, "Tencent", "Weixin", "Weixin.exe")
+            for name in ("PROGRAMFILES", "PROGRAMFILES(X86)")
+            if (root := os.environ.get(name))
         ]
         return next((path for path in candidates if path and os.path.isfile(path)), None)

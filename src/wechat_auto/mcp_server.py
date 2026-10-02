@@ -59,6 +59,60 @@ def create_server(*, memory_db: str, memory_root: str,
                                 profiles_path=profiles_db)
     indexer = ArchiveIndexer(store)
     dashboard = DashboardBuilder(store, Path(memory_root) / "dashboard")
+    from wechat_auto.backends.collection_sync import LocalCollectionSource
+    from wechat_auto.memory.collection import MomentsCollection
+    from wechat_auto.memory.contact_state import ContactState
+    collection = MomentsCollection(store)
+    contact_state = ContactState(store)
+    collection_source = LocalCollectionSource(
+        memory_path=memory_db, profiles_path=profiles_db or 'data/wechat_contact_profiles.sqlite3',
+        moments_path=moments_db or 'data/wechat_moments.sqlite3')
+
+    @server.tool(name='sync.contacts_moments_local')
+    def sync_contacts_moments_local() -> dict:
+        """Refresh all cached local contact profiles/Moments; no remote media download."""
+        return collection_source.refresh()
+
+    @server.tool(name='sync.moments_coverage')
+    def sync_moments_coverage(person_id: str) -> dict:
+        """Read per-person local cache/UI loading history, never certify all server history."""
+        return collection.get(person_id)
+
+    @server.tool(name='sync.enqueue_moments_contacts')
+    def sync_enqueue_moments_contacts(person_ids: list[str]) -> dict:
+        """Queue explicitly selected known contacts; raw contact rows are not all friends."""
+        return collection.enqueue(person_ids)
+
+    @server.tool(name='sync.moments_queue')
+    def sync_moments_queue() -> list[dict]:
+        """Read the resumable contact loading queue without UI actions."""
+        return collection.queue()
+
+    @server.tool(name='entities.contact_state')
+    def entities_contact_state(person_id: str) -> dict:
+        """Read directional deletion, blocking, access states and their evidence history."""
+        return contact_state.get(person_id)
+
+    @server.tool(name='entities.record_contact_state')
+    def entities_record_contact_state(person_id: str, relation: str, value: str,
+                                      source: str, evidence_ref: str, observation_key: str,
+                                      confirmed: bool = False) -> dict:
+        """Record reviewed state only; never delete/block contacts or send probe messages."""
+        return contact_state.record(person_id, relation, value, source=source,
+                                    evidence_ref=evidence_ref, observation_key=observation_key,
+                                    confirmed=confirmed)
+
+    @server.tool(name='sync.recover_moments_contact')
+    def sync_recover_moments_contact(person_id: str) -> dict:
+        """Recover an interrupted entry after checking its collector process has ended."""
+        return {'recovered': collection.recover_interrupted(person_id)}
+
+    if basic_skill is not None:
+        @server.tool(name='sync.load_contact_moments')
+        def sync_load_contact_moments(person_id: str, max_pages: int = 5) -> dict:
+            """Load one verified person's visible album then refresh local DB; bounded and resumable."""
+            return collection.run_one(person_id, basic_skill, sync_after_load=collection_source,
+                                      max_pages=max_pages)
 
     @server.tool(name="status.summary")
     def status_summary() -> dict:
@@ -375,6 +429,49 @@ def create_server(*, memory_db: str, memory_root: str,
             """Observe main and auxiliary client-process HWNDs separately."""
             return basic_skill.observe_windows(include_ocr=include_ocr)
 
+        @server.tool(name="vision.inspect_windows")
+        def vision_inspect_windows(include_ocr: bool = True) -> list[dict]:
+            """Compact HWND roles, layered surfaces and operations; omit private OCR/text."""
+            return basic_skill.inspect_windows(include_ocr=include_ocr)
+
+        @server.tool(name="vision.resolve_window")
+        def vision_resolve_window(page: str, presentation: str | None = None, hwnd: int | None = None) -> dict:
+            """Select a unique current surface; never authenticates a contact or executes input."""
+            return basic_skill.resolve_target_window(page, presentation=presentation, hwnd=hwnd)
+
+        @server.tool(name="actions.navigate_page")
+        def actions_navigate_page(page: str, max_steps: int = 6) -> dict:
+            """Bounded registered navigation, reselecting windows after each verified step."""
+            return basic_skill.navigate_page(page, max_steps=max_steps)
+
+        @server.tool(name="actions.restore_main_window")
+        def actions_restore_main_window(max_steps: int = 6) -> dict:
+            """Close known read-only auxiliary content; never cancel editors or close main client."""
+            return basic_skill.restore_main_window(max_steps=max_steps)
+
+        @server.tool(name="actions.ensure_contacts_section")
+        def actions_ensure_contacts_section() -> dict:
+            """Expand only the personal Contacts tree using current header/chevron observations."""
+            return basic_skill.ensure_contacts_section()
+
+        @server.tool(name="sync.capture_contact_profile")
+        def sync_capture_contact_profile(wechat_id: str, expected_alias: str,
+                                         database_path: str = 'data/wechat_contact_profiles.sqlite3') -> dict:
+            """Archive explicit fields on a verified profile, preserving unobserved prior fields."""
+            result = basic_skill.capture_contact_profile(wechat_id, expected_alias, database_path)
+            result['indexing'] = indexer.index_profile_snapshots(database_path)
+            return result
+
+        @server.tool(name="vision.prepare_review")
+        def vision_prepare_review(operation: str, hwnd: int | None = None, expected_alias: str | None = None) -> dict:
+            """Save a private current screenshot and short-lived single-use review plan; no input."""
+            return basic_skill.prepare_visual_review(operation, hwnd=hwnd, expected_alias=expected_alias)
+
+        @server.tool(name="actions.apply_review")
+        def actions_apply_review(review_id: str, box: list[float], source_page: str) -> dict:
+            """Validate an Agent's screenshot box, perform one read-only navigation and verify it."""
+            return basic_skill.apply_visual_review(review_id, box, source_page)
+
         @server.tool(name="actions.page_operation")
         def actions_page_operation(operation: str, hwnd: int | None = None,
                                    expected_page: str | None = None) -> dict:
@@ -420,6 +517,13 @@ def create_server(*, memory_db: str, memory_root: str,
         def reply_send_confirmed(confirmation_id: str, conversation_id: str,
                                  contact: str, text: str) -> dict:
             """Consume an exact confirmation, then send through BasicSkill."""
+            members = store._connection.execute(
+                "SELECT m.person_id FROM conversation_members m JOIN people p USING(person_id) "
+                "JOIN conversations c ON c.conversation_id=m.conversation_id "
+                "WHERE m.conversation_id=? AND c.conversation_type='direct' AND p.person_type<>'self'",
+                (conversation_id,)).fetchall()
+            if any(contact_state.get(row[0])['automatic_send_blocked'] for row in members):
+                raise PermissionError('Recipient relationship state blocks dispatch; review required')
             draft_id = store.consume_confirmation(confirmation_id, conversation_id, text)
             try:
                 result = basic_skill.execute(action="send_text", contact=contact,

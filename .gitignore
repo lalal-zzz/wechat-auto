@@ -58,3 +58,9 @@ data/
 *.db
 *.sqlite
 data/.secrets/
+
+# Local development ledgers (keep on disk, never publish)
+docs/PROJECT_STATE.md
+docs/HISTORY_SOURCE_AUDIT.md
+docs/PROJECT_PROBLEM_TREE.md
+docs/PROJECT_SOLUTION_TREE.md

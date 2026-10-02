@@ -2,6 +2,16 @@
 from __future__ import annotations
 
 
+class MomentMediaDownloadError(RuntimeError):
+    """Safe failure details without the private media URL or dynamic content."""
+
+    def __init__(self, expected: int, saved: list[str]):
+        self.expected = expected
+        self.saved_paths = list(saved)
+        self.failure_code = 'moment_media_download_incomplete'
+        super().__init__(f'{self.failure_code}:{len(saved)}/{expected}')
+
+
 class DatabaseMomentsBackend:
     def __init__(self, db=None):
         if db is None:
@@ -19,6 +29,10 @@ class DatabaseMomentsBackend:
         if limit <= 0:
             raise ValueError("limit must be positive")
         return [dict(feed) for feed in self._moments.get_moments(limit=limit, username=username)]
+
+    def read_all_available(self, username: str | None = None) -> list[dict]:
+        """Read all locally available rows, not an entire remote timeline."""
+        return [dict(feed) for feed in self._moments.get_moments(limit=0, username=username)]
 
     def archive_latest(self, database_path: str, *, limit: int = 20, username: str | None = None) -> dict:
         from wechat_auto.storage import MomentStore
@@ -52,4 +66,12 @@ class DatabaseMomentsBackend:
         """
         if not confirm:
             raise PermissionError("Moment media download requires confirm=True after user approval")
-        return list(self._moments.download_moment_media(feed, save_dir=directory))
+        expected = len(feed.get('images') or []) + len(feed.get('videos') or [])
+        if not expected:
+            raise ValueError('Moment has no media to download')
+        saved = list(self._moments.download_moment_media(feed, save_dir=directory))
+        if len(saved) != expected:
+            # The optional dependency silently skips request failures. Do not
+            # let [] or a partial result masquerade as a completed download.
+            raise MomentMediaDownloadError(expected, saved)
+        return saved

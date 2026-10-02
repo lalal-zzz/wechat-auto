@@ -6,7 +6,7 @@ from dataclasses import asdict, dataclass, replace
 
 from wechat_auto.actions.semantics import PageId
 
-PAGE_CATALOG_VERSION = 2
+PAGE_CATALOG_VERSION = 3
 
 
 @dataclass(frozen=True)
@@ -64,7 +64,7 @@ PAGES = (
     PageSpec(PageId.CHANNELS_LIVE, "channels_live", "视频号直播", "window", "channels", (("直播",), ("直播中", "进入直播间", "观看")), "window"),
     PageSpec(PageId.WEB_SEARCH, "web_search", "搜一搜", "panel", "", (("搜一搜",), ("搜索", "全部", "文章")), "window"),
     PageSpec(PageId.MINI_PROGRAM, "mini_program", "小程序", "window", ""),
-    PageSpec(PageId.SETTINGS, "settings", "设置", "window", "", (("设置", "账号与存储"), ("账号设置", "通用设置", "消息通知", "通用")), "window"),
+    PageSpec(PageId.SETTINGS, "settings", "设置", "window", "", (("设置", "账号与存储", "关于微信"), ("账号设置", "通用设置", "消息通知", "通用", "快捷键")), "window"),
     PageSpec(PageId.FILE_TRANSFER, "file_transfer", "文件传输助手", "base", "chat", (("文件传输助手",),), "header"),
     PageSpec(PageId.FAVORITES, "favorites", "收藏", "base", "", (("收藏",), ("全部", "笔记", "链接", "文件")), "window"),
     PageSpec(PageId.MAIN_MENU, "main_menu", "主菜单", "overlay", "", (("设置",), ("收藏", "锁定", "备份与恢复", "迁移与备份")), "window"),

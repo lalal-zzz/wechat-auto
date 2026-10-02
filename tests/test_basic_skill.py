@@ -3,13 +3,17 @@ from unittest.mock import MagicMock
 import pytest
 
 from wechat_auto.actions.basic import BasicSkill
-from wechat_auto.actions.contracts import LayoutProfile
+from wechat_auto.actions.contracts import StaleFrameError
 
 
 def _skill(mock_app, mock_finder, config, session):
     skill = BasicSkill(mock_app, config, session)
     skill._keyboard_only_auto = MagicMock()
     skill._vision_auto = MagicMock()
+    skill._focus_input = MagicMock()
+    skill._contact_list_bounds = MagicMock(return_value=(1000, 800, [.05, .14, .40, 1.]))
+    skill.ensure_contacts_section = MagicMock()
+    skill.prepare_visual_review = MagicMock(return_value={'review_id': 'test', 'input_dispatched': False})
     return skill
 
 
@@ -21,52 +25,90 @@ def test_click_and_scroll_are_hwnd_only(mock_app, mock_finder, config, session):
     skill.keyboard_only.wheel_window_fraction.assert_called_once_with(.5, .5, 3)
 
 
-def test_action_receipt_and_layout_mismatch_gate(mock_app, mock_finder, config, session):
+def test_action_receipt_uses_observed_coordinates(mock_app, mock_finder, config, session):
     skill = _skill(mock_app, mock_finder, config, session)
     result = skill.click(.2, .3)
-    assert result["transport"] == "hwnd"
-    assert result["receipt_id"].startswith("ar")
-    assert result["executed_at"]
-    skill.layout_profile = LayoutProfile("4.1", 1000, 800, profile_id="strict")
-    skill.vision.size.return_value = (900, 800)
-    with pytest.raises(RuntimeError, match="layout mismatch"):
-        skill.click(.2, .3)
+    assert result['coordinate_source'] == 'observed_frame'
+    assert result['receipt_id'].startswith('ar')
 
 
-def test_navigation_uses_pixel_probe_without_ocr(mock_app, mock_finder, config, session):
+def test_navigation_never_falls_back_to_fixed_coordinates(mock_app, mock_finder, config, session):
     skill = _skill(mock_app, mock_finder, config, session)
-    skill.vision.is_green_at.side_effect = [False, True]
-
-    result = skill.open_navigation("contacts")
-
-    assert result["ocr_used"] is False
-    assert result["attempts"] == 2
-    skill.vision.ocr.assert_not_called()
+    skill.page_operation = MagicMock(return_value={'success': False})
+    with pytest.raises(RuntimeError, match='postcondition'):
+        skill.open_navigation('contacts')
+    skill.keyboard_only.click_window_fraction.assert_not_called()
 
 
-def test_navigation_uses_ocr_marker_only_as_explicit_fallback(
+def test_navigation_recovery_runs_entire_observation_again(mock_app, mock_finder, config, session):
+    skill = _skill(mock_app, mock_finder, config, session)
+    skill._page_operation_once = MagicMock(side_effect=[
+        {'success': False, 'source_page': 'chat', 'after_pages': ['chat'], 'point': [.04, .27]},
+        {'success': True, 'source_page': 'chat', 'after_pages': ['contacts'], 'point': [.03, .19]},
+    ])
+    result = skill.page_operation('open_contacts')
+    assert skill._page_operation_once.call_count == 2
+    assert result['success'] and result['automatic_retry']
+    assert [a['point'] for a in result['attempts']] == [[.04, .27], [.03, .19]]
+
+
+def test_resize_before_dispatch_reobserves_and_attempt_limit_stops(
     mock_app, mock_finder, config, session
 ):
-    config.ocr_verify_enabled = True
     skill = _skill(mock_app, mock_finder, config, session)
-    skill.vision.is_green_at.return_value = False
-    skill.vision.ocr.return_value = [{"text": "通讯录", "x": 0, "y": 0, "w": 10, "h": 10}]
+    skill._page_operation_once = MagicMock(side_effect=StaleFrameError('resize'))
+    result = skill.page_operation('open_contacts', max_attempts=3)
+    assert skill._page_operation_once.call_count == 3
+    assert result['success'] is False and result['input_dispatched'] is False
+    assert all(a['error'] == 'stale_frame' for a in result['attempts'])
+    skill.keyboard_only.click_window_fraction.assert_not_called()
 
-    result = skill.open_navigation("contacts")
 
-    assert result["verified_by"] == "ocr_page_marker"
-    assert result["ocr_used"] is True
-    skill.keyboard_only.click_window_fraction.assert_called_once_with(
-        skill.layout.contacts_button[0], skill.layout.contacts_button[1]
-    )
+def test_ambiguous_control_is_not_retried(mock_app, mock_finder, config, session):
+    skill = _skill(mock_app, mock_finder, config, session)
+    skill._page_operation_once = MagicMock(side_effect=RuntimeError('ambiguous control'))
+    with pytest.raises(RuntimeError, match='ambiguous'):
+        skill.page_operation('open_contacts')
+    skill._page_operation_once.assert_called_once()
+
+
+def test_missing_current_glyph_recalculates_then_offers_image_review(mock_app, mock_finder, config, session):
+    from wechat_auto.primitives.page_controls import NavigationControlError
+
+    skill = _skill(mock_app, mock_finder, config, session)
+    skill._page_operation_once = MagicMock(side_effect=NavigationControlError('glyph not unique'))
+    result = skill.page_operation('open_chats')
+    assert skill._page_operation_once.call_count == 2
+    assert not result['success'] and not result['input_dispatched']
+    assert result['visual_review']['review_id'] == 'test'
+    skill.prepare_visual_review.assert_called_once_with('open_chats', hwnd=None)
+    skill.keyboard_only.click_window_fraction.assert_not_called()
+
+
+@pytest.mark.parametrize('operation,after', [
+    ('open_contacts', ['chat', 'main_menu']), ('open_contacts', ['unknown']),
+    ('open_main_menu', ['chat']), ('close_content_tab', ['web_search']),
+])
+def test_recovery_stops_on_changed_page_or_non_idempotent_action(
+    mock_app, mock_finder, config, session, operation, after
+):
+    skill = _skill(mock_app, mock_finder, config, session)
+    skill._page_operation_once = MagicMock(return_value={
+        'success': False, 'source_page': 'chat', 'after_pages': after,
+    })
+    result = skill.page_operation(operation)
+    assert result['automatic_retry'] is False
+    skill._page_operation_once.assert_called_once()
 
 
 def test_unverified_chat_search_never_presses_enter(mock_app, mock_finder, config, session):
     skill = _skill(mock_app, mock_finder, config, session)
+    skill.open_navigation = MagicMock()
+    skill.prepare_search = MagicMock()
     result = skill.open_chat("朋友")
     assert result["opened"] is False
     assert result["selection_required"] is True
-    skill.keyboard_only.prepare_chat_search.assert_called_once_with("朋友")
+    skill.prepare_search.assert_called_once_with("朋友")
     skill.keyboard_only._enter.assert_not_called()
 
 
@@ -80,18 +122,15 @@ def test_open_chat_by_avatar_uses_local_template_without_ocr(
     }
     result = skill.open_chat_by_avatar(b"avatar")
     assert result["ocr_used"] is False
-    skill.keyboard_only.click_window_fraction_sync.assert_called_once_with(.17, .30)
+    skill.keyboard_only.click_window_fraction_sync.assert_called_once_with(.10, .30)
     skill.vision.ocr.assert_not_called()
 
 
-def test_open_visible_chat_row_uses_hwnd_and_pixel_probe(mock_app, mock_finder, config, session):
+def test_row_index_cannot_select_with_old_fixed_coordinates(mock_app, mock_finder, config, session):
     skill = _skill(mock_app, mock_finder, config, session)
-    skill.open_navigation = MagicMock(return_value={"page": "chats", "ocr_used": False})
-    skill.vision.is_green_at.return_value = True
-    result = skill.open_visible_chat_row(2)
-    assert result["ocr_used"] is False
-    skill.keyboard_only.click_window_fraction.assert_called_once_with(.17, .309)
-    skill.vision.ocr.assert_not_called()
+    with pytest.raises(RuntimeError, match='removed'):
+        skill.open_visible_chat_row(2)
+    skill.keyboard_only.click_window_fraction.assert_not_called()
 
 
 def test_right_click_and_key_are_hwnd_only(mock_app, mock_finder, config, session):
@@ -128,31 +167,11 @@ def test_contact_mutation_requires_confirmation_bound_to_username(
         )
 
 
-def test_set_remark_uses_calibrated_semantics_and_verifies_result(
-    mock_app, mock_finder, config, session
-):
-    config.ocr_verify_enabled = True
+def test_old_semantic_mutation_coordinates_are_unavailable(mock_app, mock_finder, config, session):
     skill = _skill(mock_app, mock_finder, config, session)
-    skill.open_contact_profile = MagicMock(return_value={"verified_by": "ocr"})
-    skill.vision.size.return_value = (1000, 800)
-    skill.vision.ocr.return_value = [{"text": "新备注"}]
-    skill.layout_profile = LayoutProfile(
-        "4.1.13.12", 1000, 800,
-        elements={
-            "21.03:remark": [.70, .20],
-            "23.01:remark_input": [.60, .30],
-            "23.02:save": [.90, .10],
-        },
-    )
-    result = skill.execute_contact_action(
-        username="wxid_test_friend", contact_action="set_remark", ui_query="朋友",
-        value="新备注", confirm=True, confirmation_target="wxid_test_friend",
-    )
-    assert result["verified_by"] == "profile_ocr_after_write"
-    assert [call.args for call in skill.keyboard_only.click_window_fraction.call_args_list] == [
-        (.70, .20), (.60, .30), (.90, .10),
-    ]
-    skill.keyboard_only._type_text.assert_called_once_with("新备注")
+    with pytest.raises(RuntimeError, match='removed'):
+        skill._semantic_click(21, 3)
+    skill.keyboard_only.click_window_fraction.assert_not_called()
 
 
 def test_prepare_text_uses_hwnd_driver(mock_app, mock_finder, config, session):
@@ -160,7 +179,7 @@ def test_prepare_text_uses_hwnd_driver(mock_app, mock_finder, config, session):
     skill.open_chat = MagicMock(return_value={"verified_by": "ocr", "opened": True})
     result = skill.prepare_text("target", "hello")
     assert result["sent"] is False
-    skill.keyboard_only.click_input.assert_called_once()
+    skill._focus_input.assert_called_once()
     skill.keyboard_only._type_text.assert_called_once_with("hello")
 
 
@@ -170,7 +189,7 @@ def test_unselected_search_never_receives_reply_text(mock_app, mock_finder, conf
     from wechat_auto.exceptions import ChatNotFoundError
     with pytest.raises(ChatNotFoundError, match='chat_not_opened'):
         skill.prepare_text('target', 'reply')
-    skill.keyboard_only.click_input.assert_not_called()
+    skill._focus_input.assert_not_called()
     skill.keyboard_only._type_text.assert_not_called()
 
 
@@ -232,10 +251,11 @@ def test_open_contact_profile_uses_only_verified_contacts_result(
 ):
     config.ocr_verify_enabled = True
     skill = _skill(mock_app, mock_finder, config, session)
+    skill.open_navigation = MagicMock()
+    skill.prepare_search = MagicMock()
     skill.vision.region_of.return_value = (0, 0, 400, 500)
     skill.vision.size.return_value = (1000, 800)
     skill.vision.ocr.side_effect = [
-        [{"text": "通讯录", "x": 100, "y": 50, "w": 60, "h": 20}],
         [
             {"text": "联系人", "x": 100, "y": 150, "w": 50, "h": 20},
             {"text": "张三", "x": 120, "y": 200, "w": 60, "h": 20},
@@ -247,6 +267,8 @@ def test_open_contact_profile_uses_only_verified_contacts_result(
 
     assert result["verified_by"] == "contacts_page_and_profile_ocr"
     assert skill.keyboard_only.click_window_fraction.call_args_list[-1].args == (.15, .2625)
+    skill.ensure_contacts_section.assert_called_once()
+    skill.prepare_search.assert_not_called()
 
 
 @pytest.mark.parametrize('visible', ['微信号', '微信号：wxid_test_friend_extra', '微信号：other'])
@@ -264,6 +286,8 @@ def test_open_contact_profile_rejects_missing_contact_section(
 ):
     config.ocr_verify_enabled = True
     skill = _skill(mock_app, mock_finder, config, session)
+    skill.open_navigation = MagicMock()
+    skill.prepare_search = MagicMock()
     skill.vision.size.return_value = (1000, 800)
     skill.vision.ocr.side_effect = [
         [{"text": "通讯录", "x": 100, "y": 50, "w": 60, "h": 20}],
@@ -285,28 +309,12 @@ def test_prepare_file_pastes_through_hwnd(mock_app, mock_finder, config, session
         result = skill.prepare_file("target", str(payload))
     assert result["sent"] is False
     set_files.assert_called_once_with([str(payload.resolve())])
-    skill.keyboard_only.click_input.assert_called_once()
+    skill._focus_input.assert_called_once()
     skill.keyboard_only._paste.assert_called_once()
 
 
-def test_send_sticker_by_id_requires_verified_catalog(
-    mock_app, mock_finder, config, session, tmp_path
-):
-    from wechat_auto.storage import StickerCatalog
-    catalog_path = tmp_path / "catalog.sqlite3"
-    with StickerCatalog(catalog_path) as catalog:
-        catalog.register("abc", hint="加油", cell=(.4, .5),
-                         layout_size=(1000, 800), page_steps=2, verified=True)
+def test_sticker_id_cannot_use_stored_cell_coordinates(mock_app, mock_finder, config, session):
     skill = _skill(mock_app, mock_finder, config, session)
-    skill.vision.size.return_value = (1000, 800)
-    skill.open_chat = MagicMock(return_value={"verified_by": "ocr"})
-    skill.open_emoji = MagicMock()
-    skill.scroll = MagicMock()
-    skill.click = MagicMock()
-    result = skill.send_sticker_by_id(
-        "friend", "abc", str(catalog_path), confirm=True
-    )
-    assert result["sent"] is True
-    skill.open_chat.assert_called_once_with("friend")
-    skill.scroll.assert_called_once_with(.65, .70, 2)
-    skill.click.assert_called_once_with(.4, .5)
+    with pytest.raises(RuntimeError, match='removed'):
+        skill.send_sticker_by_id('target', 'sticker', 'catalog.sqlite3', confirm=True)
+    skill.keyboard_only.click_window_fraction.assert_not_called()

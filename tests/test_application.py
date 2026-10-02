@@ -39,7 +39,10 @@ class FakeUser32:
         return 1
     def SetForegroundWindow(self, hwnd): self.foreground = hwnd; return 1
     def GetForegroundWindow(self): return self.foreground
-    def GetWindowThreadProcessId(self, _hwnd, _pid): return 4242
+    def GetWindowThreadProcessId(self, _hwnd, pid):
+        if pid:
+            ctypes.cast(pid, ctypes.POINTER(wt.DWORD)).contents.value = 9876
+        return 4242
     def AttachThreadInput(self, src, dst, value): self.attach_calls.append((src, dst, bool(value))); return 1
     def BringWindowToTop(self, _hwnd): return 1
     def SetProcessDpiAwarenessContext(self, _value): return 1

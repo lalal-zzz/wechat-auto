@@ -16,8 +16,15 @@ description: Audit aliases, missing entities, removals, restorations, and merge 
 5. Create merge candidates for suspected duplicates and call `entities.decide_merge` only after user confirmation.
 6. Record restoration when an entity returns; retain all earlier status events.
 
-The MemoryStore presence/snapshot machinery exists. Full system-signal recognition
-and the send-time status gate remain WA-005; do not invent unavailable MCP tools.
+Read [CONTACT_COLLECTION.md](../../docs/CONTACT_COLLECTION.md) for the directional
+state schema. `entities.contact_state` reads history; `entities.record_contact_state`
+records reviewed evidence using a unique observation_key and evidence_ref.
+Keep local_contact/local_block/peer_contact/peer_block/moments_access separate.
+Confirmed deletion/blocking needs user_confirmation or reviewed_system_signal
+with confirmed=true; ui_observation may only assert Moments access.
+Automatic version-specific DB flag/system-message recognition remains unimplemented.
+Mapped private-conversation members have a known-state MCP send guard; full
+recipient verification and all BasicSkill entry gates still remain WA-005.
 Distinguish removing a contact locally from the other person removing self;
 never test either by sending a message or silently adding the contact again.
 
@@ -30,11 +37,20 @@ never an authorization target.
 - Equal names/different stable IDs: keep separate.
 - Stable ID absent: retain a provisional source identity and do not aggregate person analysis.
 - Snapshot gap: reset neither counters nor history; mark coverage uncertain.
+- Reusing a snapshot ID with changed content is an error, not another observation.
+- Incomplete snapshots do not restore missing contacts. Continued complete absence
+  counts across successive snapshots even when the previous snapshot was already empty.
+- Unblock/restoration is a new sourced observation, never deletion of earlier evidence.
+- Do not execute delete/block to test detection. Status recording has no UI side effects.
 - Incorrect merge: use a correction/rebuild workflow; never delete evidence.
 
 ## Version rules
 
 Identity snapshots and decisions are append-only. Merge/split decisions invalidate affected person, relationship, conversation, and dashboard versions. Algorithm-version changes must not silently reinterpret prior decisions.
+
+0.6.0 / Memory schema 3 adds directional state and collection coverage histories.
+Identity merging preserves their evidence history; the old contact's queued UI
+entry becomes merged. Schema 1/2 migrate without removing history.
 
 ## Shared UI and recipient contract
 

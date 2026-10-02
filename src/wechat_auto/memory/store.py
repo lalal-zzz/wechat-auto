@@ -283,18 +283,35 @@ class MemoryStore:
         CREATE INDEX IF NOT EXISTS idx_event_time ON events(started_at,ended_at);
         CREATE INDEX IF NOT EXISTS idx_jobs_pending ON analysis_jobs(status,priority,available_at);
         CREATE INDEX IF NOT EXISTS idx_dirty_node ON dirty_nodes(node_type,node_id);
+        CREATE TABLE IF NOT EXISTS contact_state_history(
+            observation_key TEXT PRIMARY KEY, person_id TEXT NOT NULL REFERENCES people(person_id),
+            relation TEXT NOT NULL, value TEXT NOT NULL, source TEXT NOT NULL,
+            evidence_ref TEXT NOT NULL, confirmed INTEGER NOT NULL, observed_at TEXT NOT NULL,
+            fingerprint TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS moments_coverage(
+            observation_key TEXT PRIMARY KEY, person_id TEXT NOT NULL REFERENCES people(person_id),
+            path TEXT NOT NULL, status TEXT NOT NULL, count INTEGER NOT NULL, pages INTEGER NOT NULL,
+            reason TEXT NOT NULL, evidence_ref TEXT NOT NULL, oldest_at TEXT NOT NULL,
+            newest_at TEXT NOT NULL, observed_at TEXT NOT NULL, fingerprint TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS moments_load_queue(
+            person_id TEXT PRIMARY KEY REFERENCES people(person_id), status TEXT NOT NULL,
+            last_error TEXT NOT NULL, updated_at TEXT NOT NULL
+        );
         """)
         existing = self._connection.execute(
             "SELECT value FROM schema_meta WHERE key='schema_version'"
         ).fetchone()
         existing_version = int(existing[0]) if existing is not None else None
-        if existing_version == 1 and self.schema_version == 2:
-            # v2 adds only pending_actions. The CREATE TABLE above is the full,
-            # idempotent migration and does not rewrite any v1 rows.
+        if existing_version in {1, 2} and self.schema_version == 3:
+            # v2 adds pending_actions; v3 adds directional contact observations,
+            # collection coverage and a resumable loading queue. Existing rows
+            # and Markdown version references are preserved.
             self._connection.execute(
-                "UPDATE schema_meta SET value='2' WHERE key='schema_version'"
+                "UPDATE schema_meta SET value='3' WHERE key='schema_version'"
             )
-            existing_version = 2
+            existing_version = 3
         if existing_version is not None and existing_version != self.schema_version:
             self._connection.close()
             raise RuntimeError(
@@ -400,6 +417,12 @@ class MemoryStore:
             self._connection.execute("UPDATE OR IGNORE group_memberships SET person_id=? WHERE person_id=?", (left, right))
             self._connection.execute("DELETE FROM group_memberships WHERE person_id=?", (right,))
             self._connection.execute("UPDATE profile_snapshot_refs SET person_id=? WHERE person_id=?", (left, right))
+            self._connection.execute("UPDATE contact_state_history SET person_id=? WHERE person_id=?", (left, right))
+            self._connection.execute("UPDATE moments_coverage SET person_id=? WHERE person_id=?", (left, right))
+            # Retain both queue records for audit; the merged identity cannot
+            # be loaded independently after confirmation.
+            self._connection.execute("UPDATE moments_load_queue SET status='merged',updated_at=? WHERE person_id=?",
+                                     (_now(), right))
             self._connection.execute("UPDATE claims SET subject_person_id=? WHERE subject_person_id=?", (left, right))
             self._connection.execute("UPDATE claims SET object_person_id=? WHERE object_person_id=?", (left, right))
             self._connection.execute("UPDATE OR IGNORE event_people SET person_id=? WHERE person_id=?", (left, right))
@@ -924,6 +947,13 @@ class MemoryStore:
     def observe_presence(self, entity_type: str, entity_id: str, *, present: bool,
                          observed_at: str | None = None, snapshot_key: str = "") -> str:
         now = observed_at or _now()
+        if snapshot_key:
+            existing = self._connection.execute(
+                "SELECT status FROM entity_status_events WHERE entity_type=? AND entity_id=? "
+                "AND snapshot_key=?", (entity_type, entity_id, snapshot_key),
+            ).fetchone()
+            if existing:
+                return str(existing[0])
         row = self._connection.execute(
             "SELECT * FROM entity_presence WHERE entity_type=? AND entity_id=?",
             (entity_type, entity_id),
@@ -973,6 +1003,20 @@ class MemoryStore:
         now = observed_at or _now()
         snapshot_id = snapshot_id or _short_id("ss")
         current = {str(value) for value in entity_ids if str(value)}
+        duplicate = self._connection.execute(
+            "SELECT * FROM entity_snapshots WHERE snapshot_id=?", (snapshot_id,),
+        ).fetchone()
+        if duplicate:
+            saved = {str(row[0]) for row in self._connection.execute(
+                "SELECT entity_id FROM entity_snapshot_members WHERE snapshot_id=?", (snapshot_id,))}
+            if (saved != current or duplicate['entity_type'] != entity_type
+                    or duplicate['source'] != source or bool(duplicate['complete']) != complete):
+                raise ValueError('Snapshot ID reused with different content')
+            statuses = {row['entity_id']: row['status'] for row in self._connection.execute(
+                "SELECT entity_id,status FROM entity_status_events WHERE snapshot_key=?", (snapshot_id,))}
+            return {'snapshot_id': snapshot_id, 'seen': len(current),
+                    'missing': sum(s in {'missing', 'inferred_removed'} for s in statuses.values()),
+                    'statuses': statuses, 'complete': complete, 'duplicate': True}
         previous_row = self._connection.execute("""
             SELECT snapshot_id FROM entity_snapshots
             WHERE entity_type=? AND complete=1 ORDER BY observed_at DESC,rowid DESC LIMIT 1
@@ -994,7 +1038,12 @@ class MemoryStore:
             )
         statuses = {item: self.observe_presence(
             entity_type, item, present=True, observed_at=now, snapshot_key=snapshot_id
-        ) for item in current}
+        ) for item in current} if complete else {}
+        # Keep checking previously missing entities, even after they disappear
+        # from the immediately previous complete snapshot.
+        previous.update(str(row[0]) for row in self._connection.execute(
+            "SELECT entity_id FROM entity_presence WHERE entity_type=? AND status IN "
+            "('missing','inferred_removed')", (entity_type,)))
         missing = previous - current if complete else set()
         statuses.update({item: self.observe_presence(
             entity_type, item, present=False, observed_at=now, snapshot_key=snapshot_id

@@ -1,8 +1,8 @@
 # 开发环境
 
 - Windows 10/11
-- Python：`python`
-- 微信实测版本：`4.1.13.12`
+- Python：3.x，使用自己的 Windows Python 环境
+- 微信架构：Windows 微信 4.x
 - 主窗口类：`Qt51514QWindowIcon`
 
 安装数据库可选依赖：
