@@ -1,68 +1,50 @@
 ---
 name: wechat-reply-monitor
-description: Run one persistent-cursor message-monitor cycle, construct bounded reply context, and enforce exact single-use confirmation before sending.
+description: 按持久游标执行一次消息监控，构造有界回复上下文，并在发送前强制核对正文与单次确认。
 ---
 
-# WeChat Reply Monitor
+# 微信消息监控与回复草稿
 
-An external scheduler invokes one cycle at a time.
+外部调度器每次只触发一个监控周期。使用分析结论前阅读 [ANALYSIS_QUALITY_STANDARD.md](references/ANALYSIS_QUALITY_STANDARD.md)：事件摘要不能单独证明人物偏好或性格。对生日、纪念日等有争议或过时事实，先查证；无法核实时不要把它当回复前提。此项是 Agent 操作要求，不代表运行时已实现自动质量门禁。
 
-## Procedure
+先参考目标私聊/群聊中自己的表达习惯，再按需读取人物背景。工作群语气不得继承亲密私聊用语；无关群聊内容和完整人物档案不应塞入每次回复上下文。
 
-1. Call `monitor.run_once`; it reads from the saved cursor, archives the delta, dirties affected months, and returns compact context.
-2. If no inbound messages exist, create no draft and advance only the valid watermark.
-3. Build from current message, current conversation Memory, open commitments, recent events, relevant person claims, and the user's style in this conversation.
-4. Save with `reply.create_draft` and show the exact text.
-5. Before approval, follow the shared recipient contract: audit current status,
-   resolve the stable recipient, and verify the contact profile and chat identity.
-   A missing, removed, unknown, ambiguous, or name-only target stops dispatch.
-   The full runtime identity/status gate is pending WA-005; do not describe the
-   existing send tool as certifying the recipient.
-6. After explicit approval and verified recipient support, call `reply.confirm`,
-   then `reply.send_confirmed` with unchanged conversation, recipient and text.
-7. Verify the action receipt; submitting a key event does not prove delivery.
+## 存储规则
 
-## Failure handling
+先阅读 [MEMORY_STORAGE_CONTRACT.md](references/MEMORY_STORAGE_CONTRACT.md)。分析正文按正式契约存入 Markdown，未验收候选和阅读进度只存 `data/work/analysis/{run_id}/`，不能作为正式回复记忆。显式配置存储位置时核对数据库和正文根目录并更新 `data/analysis_sources.json`。历史版本由提交接口维护，不能手动复制或覆盖。
 
-- Cursor/read failure: do not advance the cursor.
-- Stale analysis: apply the shared freshness rules below; keep old Memory as labeled background only when the draft does not require its missing updates.
-- Edited/expired/already-used confirmation: reject and request a new confirmation.
-- Action failure: mark dispatch failed; never reuse its token or auto-retry sending.
-- Ambiguous chat identity: stop before drafting/sending.
-- Search no-result/history-only/network-only: stop dispatch, retain history;
-  do not mark the person deleted or send a probe message.
+## 执行步骤
 
-## Version rules
+1. 调用 `monitor.run_once`，从已保存游标读取消息增量、归档并标记受影响月份，检查回执中实际返回的消息和水位。
+2. 没有新收到的消息时不创建草稿；仅在读取有效且成功时推进水位。
+3. 调用 `reply.build_context`，组合已完成的正式会话/双方人物/关系 Markdown、分析覆盖边界之后的归档消息与当前近期对话。返回的 `memory_sources` 明确列出实际使用的路径、版本、hash 和覆盖范围；`pending_coverage` 显示原始增量边界、读取数、未读数和游标。监控游标不是分析水位。
+   - 边界仅到日时重读末日，避免漏掉同一天较晚消息；这部分包含边界重叠，不应全部称为已确认未分析。
+   - `requires_more_data=true` 且有 `next_after_id` 时，将其作为 `pending_after_id` 继续分页，保留各页相关原文和变更。范围 unknown 时补查覆盖或来源；不能把最后几条消息当成全部未分析增量。最新明确表达和用户修正优先于历史推断，增量尚未分析不能包装为正式人物结论。
+   - 再按最新话题提取相关生活背景、未履行承诺、事件与本会话表达习惯。无需等待整份画像重新分析，但影响回复的未读进展必须先补齐。
+   - 依赖事件时，阅读 [EVENT_ANALYSIS_STANDARD.md](references/EVENT_ANALYSIS_STANDARD.md)，核对最新阶段、变更计划和未完成承诺。不得将取消的旧计划当成仍有效，也不得用沉默推断已完成。缺失的后续消息可能改变回复时，先补查证据。
+   - 依赖约定表达、玩笑或省略语时，只读取本会话中仍有效的含义、条件和必要证据；检查当前语境是否有新含义或明确拒绝。意图不清时补证据或起草澄清问题，不得猜测成承诺。历史暗号不能代替本次动作或发送确认；当前上下文 API 尚不自动识别此类表达。
+4. 调用 `reply.create_draft` 保存并向用户展示确切正文。
+5. 用户批准前，按共用收件人规则复核当前联系人状态、稳定身份、资料页与会话身份。缺失、已删除、未知、歧义或仅凭名称识别的目标都必须停止。WA-005 的完整运行时身份/状态门禁尚未完成；不得宣称现有发送工具会替你核验。
+6. 只有收到本次明确批准且收件人已核验后，才调用 `reply.confirm`，并用 `reply.send_confirmed` 发送未经修改的会话、收件人和正文。
+7. 检查动作回执；提交按键事件不代表消息已经送达。
 
-Drafts bind conversation ID, exact text, creation time, and context version. Schedule, whitelist, past approval, or `confirm=True` never authorizes a new send. Each external send requires a fresh single-use confirmation.
+## 失败处理
 
-## Shared UI and recipient contract
+- 游标或读取失败：不推进游标。
+- 分析过期：按数据新鲜度规则处理；只有当草稿不依赖缺失更新时，才可将旧 Memory 标为滞后背景。
+- 确认已修改、过期或已使用：拒绝发送，重新展示正文并取得新的确认。
+- 动作失败：记录发送失败，不重用确认令牌，不自动重试。
+- 会话身份有歧义：停止，不生成或发送草稿。
+- 搜索无结果、只有历史消息或只有网络搜索候选：停止派发，保留已有记录；不标记联系人已删除，也不发送探测消息。
 
-Before UI navigation, recipient selection, removal auditing, or reply dispatch, read
-[UI_WORKFLOW_RULES.md](../../docs/UI_WORKFLOW_RULES.md). Use its search-state table,
-stable-identity checks, missing/removal distinctions, and failure stop conditions.
-Read [UI_PAGE_CATALOG.md](../../docs/UI_PAGE_CATALOG.md) for page descriptions and
-[ACTION_VERIFICATION_MATRIX.md](../../docs/ACTION_VERIFICATION_MATRIX.md) for verification requirements.
-These references must accompany the repository skill; missing references stop UI work.
-Offline-only analysis does not require screenshots or UI actions. Static rules never
-certify a live recipient; the complete stable-identity send workflow remains WA-005.
+## UI 与数据联动
 
-## 数据更新与 Skill 联动
+发送或 UI 导航前阅读 [UI_WORKFLOW_RULES.md](references/UI_WORKFLOW_RULES.md)、[UI_PAGE_CATALOG.md](references/UI_PAGE_CATALOG.md) 和 [ACTION_VERIFICATION_MATRIX.md](references/ACTION_VERIFICATION_MATRIX.md)。执行前阅读[数据新鲜度与联动规则](references/SKILL_DATA_WORKFLOW.md)，区分当前状态、历史快照、回复和 UI 模式。
 
-执行前读取共用的
-[数据新鲜度与联动规则](../../docs/SKILL_DATA_WORKFLOW.md)，先确定历史快照、当前
-状态、回复或 UI 模式。联动由当前 Agent 读取相关 SKILL.md 并执行其工具流程，
-不是自动派生代理、创建定时任务或扩大授权。
+先运行当前会话 `monitor.run_once`，并按返回的消息范围核对目标新消息。该操作不证明所有 backlog 已读取完，也不表示分析已完成；读取范围不足时继续有界同步或停止，不能用旧消息草拟当前回复。
 
-先运行当前会话的 monitor.run_once，核对成功读取及实际返回水位；该调用不
-代表受影响月度/人物分析已经完成，也不证明所有消息 backlog 已读取到末尾。
-若当前读取预算尚未覆盖目标新消息，继续有界同步或停止，不沿用旧消息生成草稿。
-相关 Memory 滞后时，只联动 [wechat-monthly-analysis](../wechat-monthly-analysis/SKILL.md)、
-[wechat-conversation-summary](../wechat-conversation-summary/SKILL.md) 或
-[wechat-person-analysis](../wechat-person-analysis/SKILL.md) 中回复真正需要的范围。
-身份/关系状态需复核时联动 [wechat-identity-audit](../wechat-identity-audit/SKILL.md)，
-发送前页面核验交给 [wechat-ui-navigation](../wechat-ui-navigation/SKILL.md)。
-上游成功后重新构造上下文，绑定目标新消息与分析版本。旧分析仅能作注明滞后的
-背景；需要更新的承诺/状态才能正确回复时，先更新，否则停止草稿。
-确认前重新核对新消息和对象状态；影响草稿的变化要求重建和新确认。读取失败、
-身份不足或页面不符停止，Skill 联动不授权发送或创建定时任务。
+Memory 滞后时，只联动本次回复真正依赖的 wechat-monthly-analysis、wechat-conversation-summary 或 wechat-person-analysis。身份或关系状态不清楚时联动 wechat-identity-audit；发送前页面核验交给 wechat-ui-navigation。上游成功后重建上下文并绑定目标新消息和成功分析结果。确认前重新核对新消息和对象状态；任何影响正文的变化都要求重建草稿并重新确认。Skill 联动不授权发送或创建定时任务。
+
+## 随包资源范围
+
+执行规则、参考文档与模板只读取本 Skill 目录中的 `references/`、`assets/` 和已提供的 `scripts/`，相对路径从本 Skill 目录解析。不能跨目录借用另一个 Skill 的参考资源；缺少必需随包资源时报告缺失，维护时补齐本目录副本。其他 Skill 名称仅表示流程职责与上下游，不代替本目录资源。项目运行接口、正式数据路径与项目命令是运行依赖，不是外部指令来源；不为打包复制私人数据。

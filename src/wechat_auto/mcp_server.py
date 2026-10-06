@@ -54,7 +54,7 @@ def create_server(*, memory_db: str, memory_root: str,
     server._wechat_auto_store = store
     markdown = MarkdownMemory(memory_root, store)
     analysis = AnalysisService(store, markdown)
-    context = ContextBuilder(store)
+    context = ContextBuilder(store, markdown, history_db)
     evidence = EvidenceResolver(history_path=history_db, moments_path=moments_db,
                                 profiles_path=profiles_db)
     indexer = ArchiveIndexer(store)
@@ -406,10 +406,12 @@ def create_server(*, memory_db: str, memory_root: str,
 
     @server.tool(name="reply.build_context")
     def reply_build_context(conversation_id: str, current_messages: list[dict],
-                            person_id: str = "", claim_limit: int = 20) -> dict:
-        """Build compact reply context; raw historical evidence remains collapsed."""
+                            person_id: str = "", claim_limit: int = 20,
+                            pending_limit: int = 200, pending_after_id: str = "") -> dict:
+        """Combine formal Markdown Memory, unanalysed archive pages and current messages."""
         return context.reply_context(conversation_id, current_messages,
-                                     person_id=person_id or None, claim_limit=claim_limit)
+                                     person_id=person_id or None, claim_limit=claim_limit,
+                                     pending_limit=pending_limit, pending_after_id=pending_after_id)
 
     @server.tool(name="reply.confirm")
     def reply_confirm(draft_id: str) -> dict:
@@ -570,6 +572,7 @@ def create_server(*, memory_db: str, memory_root: str,
                 "time": str(item.get("create_time", "")),
                 "sender": str(item.get("sender_name") or item.get("sender_username") or ""),
                 "content": str(item.get("content", "")),
+                "id": str(item.get("server_id") or item.get("sort_seq") or ""),
             } for item in current]
             reply_context = context.reply_context(conversation, normalized_context)
             return {"username": username, "conversation_id": conversation,
