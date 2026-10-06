@@ -49,3 +49,26 @@ def test_profile_and_moment_updates_dirty_people_without_copying_body(tmp_path):
         assert {row[0] for row in rows} == {"profile_snapshot", "new_moment"}
         database_text = (tmp_path / "memory.sqlite3").read_bytes()
         assert b"private body" not in database_text
+
+
+def test_profile_archive_neither_marks_absence_nor_restores_presence(tmp_path):
+    profile_path = tmp_path / 'profiles.sqlite3'
+    with ProfileStore(profile_path) as profiles:
+        profiles.save({'wechat_id': 'wxid_test_missing', 'nickname': 'old', 'raw': {}},
+                      profile_type='contact')
+        profiles.save({'wechat_id': 'wxid_test_new', 'nickname': 'new', 'raw': {}},
+                      profile_type='contact')
+    with MemoryStore(tmp_path / 'memory.sqlite3') as memory:
+        absent = memory.ensure_person('wxid_test_absent')
+        missing = memory.ensure_person('wxid_test_missing')
+        memory.observe_presence('person', missing, present=False, snapshot_key='baseline')
+        result = ArchiveIndexer(memory).index_profiles(profile_path)
+        assert result['presence_snapshot'] == {'seen': 2, 'missing': 0, 'complete': False}
+        assert memory._connection.execute('SELECT status FROM people WHERE person_id=?',
+                                          (absent,)).fetchone()[0] == 'active'
+        assert memory._connection.execute('SELECT status FROM people WHERE person_id=?',
+                                          (missing,)).fetchone()[0] == 'missing'
+        assert memory._connection.execute('SELECT count(*) FROM entity_status_events').fetchone()[0] == 1
+        assert memory._connection.execute(
+            "SELECT p.status FROM people p JOIN person_identities i USING(person_id) "
+            "WHERE i.identity_value='wxid_test_new'").fetchone()[0] == 'unknown'

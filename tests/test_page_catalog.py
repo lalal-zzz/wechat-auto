@@ -23,6 +23,16 @@ def test_contacts_and_profile_require_multiple_independent_anchors():
     assert classify_page([box("发消息")], (1000, 800))["page"] == "unknown"
 
 
+def test_management_icon_ocr_merge_is_narrow_and_requires_second_anchor():
+    for label in ('&通讯录管理', '＆通讯录管理'):
+        state = classify_page([box(label, x=120), box('新的朋友', x=120, y=250)], (1000, 800))
+        assert state['page'] == 'contacts'
+        assert classify_page([box(label, x=120)], (1000, 800))['page'] == 'unknown'
+    for label in ('我的通讯录管理', '&微信号:public_id'):
+        state = classify_page([box(label, x=120), box('新的朋友', x=120, y=250)], (1000, 800))
+        assert state['page'] == 'unknown'
+
+
 def test_moments_page_and_action_menu_are_separate_layers():
     state = classify_page([
         box("朋友圈", y=60), box("今天"), box("赞", x=800, y=300),

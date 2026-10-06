@@ -53,21 +53,21 @@ class ArchiveIndexer:
                     str(row["wechat_id"]), person_type=str(row["profile_type"]),
                     display_name=str(row["display_name"] or row["remark"] or row["nickname"] or ""),
                     source="profile_archive", seen_at=str(row["updated_at"] or "") or None,
+                    mark_active=False,
                 )
                 for alias_type in ("nickname", "remark", "original_name"):
                     value = str(row[alias_type] or "")
                     self.store.add_alias(person_id, alias_type, value, source="profile_archive")
                 seen += 1
                 current_people.add(person_id)
-        baseline = {str(row[0]) for row in self.store._connection.execute(
-            "SELECT person_id FROM people WHERE person_type IN ('contact','self')"
-        )}
+        # An accumulated archive is neither a current friend list nor a
+        # complete snapshot. It must not create absence or restore evidence.
         snapshot = self.store.reconcile_snapshot(
-            "person", current_people, source="profile_archive", complete=True,
-            baseline_ids=baseline,
+            "person", current_people, source="profile_archive", complete=False,
         )
         return {"profiles_seen": seen, "people_created_or_seen": seen,
-                "presence_snapshot": {"seen": snapshot["seen"], "missing": snapshot["missing"]}}
+                "presence_snapshot": {"seen": snapshot["seen"], "missing": snapshot["missing"],
+                                      "complete": snapshot["complete"]}}
 
     def index_history(self, history_path: str | Path, *, batch_size: int = 10_000) -> dict:
         path = Path(history_path).expanduser().resolve()

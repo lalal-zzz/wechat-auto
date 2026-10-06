@@ -29,13 +29,13 @@ Implementation does not imply live-device certification. Person or relationship 
 per-contact album loading queue. Directional contact removal, blacklist/blocking,
 restoration and Moments access observations retain evidence history. Memory schema 3
 migrates from 1/2. Collection is limited by client visibility and supported controls;
-neither path guarantees complete server history. See [collection workflow](docs/CONTACT_COLLECTION.md).
+neither path guarantees complete server history. See the [Moments skill collection workflow](skills/wechat-profile-moments/references/CONTACT_COLLECTION.md).
 
 **Window navigation and recovery:** process-bound HWND inventory, layered page recognition,
 current-frame OpenCV/OCR targets and verified routes. Contact selection stays beneath the
 personal Contacts header, excluding New Friends and mixed search. Failed sidebar detection
 recalculates, then offers guarded Agent screenshot review through BasicSkill.
-See [window workflow](docs/WINDOW_NAVIGATION.md).
+See the [navigation skill window workflow](skills/wechat-ui-navigation/references/WINDOW_NAVIGATION.md).
 
 Profile enrichment saves explicit signature, region, source and other visible fields,
 preserving earlier values when a field is missing. Exact local cache-media archiving and
@@ -182,7 +182,7 @@ Tool areas: sync.*, entities.*, claims.*, events.*, analysis.*, memory.*, eviden
 
 | Skill | Workflow |
 |---|---|
-| [base_op](skills/base_op/SKILL.md) | Shared operating model and UI action boundary |
+| [base-op](skills/base-op/SKILL.md) | Shared operating model and UI action boundary |
 | [wechat-sync](skills/wechat-sync/SKILL.md) | Archive normalization and incremental sync |
 | [wechat-monthly-analysis](skills/wechat-monthly-analysis/SKILL.md) | Per-conversation monthly analysis |
 | [wechat-conversation-summary](skills/wechat-conversation-summary/SKILL.md) | Cross-month conversation memory |

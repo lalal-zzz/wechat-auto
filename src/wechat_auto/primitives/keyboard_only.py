@@ -152,10 +152,9 @@ class KeyboardOnlyDriver:
         )
 
     def _browser_pointer_hwnd(self, fx: float, fy: float, *, render: bool = False) -> int:
-        """Find the unique visible embedded Chromium HWND containing this point."""
+        """Find one embedded host/body at this point, excluding the main canvas."""
         sx, sy = self.point(fx, fy)
-        wanted = "Chrome_RenderWidgetHostHWND" if render else "Chrome_WidgetWin_0"
-        matches = []
+        hosts, bodies = [], []
         callback_type = ctypes.WINFUNCTYPE(wt.BOOL, wt.HWND, wt.LPARAM)
 
         def collect(hwnd, _param):
@@ -163,12 +162,35 @@ class KeyboardOnlyDriver:
             user32.GetClassNameW(hwnd, name, 256)
             rect = wt.RECT()
             user32.GetWindowRect(hwnd, ctypes.byref(rect))
-            if (name.value == wanted and user32.IsWindowVisible(hwnd)
+            if (name.value in {'Chrome_WidgetWin_0', 'Chrome_RenderWidgetHostHWND', 'MMUIRenderSubWindowHW'}
+                    and user32.IsWindowVisible(hwnd)
                     and rect.left <= sx < rect.right and rect.top <= sy < rect.bottom):
-                matches.append(int(hwnd))
+                (hosts if name.value == 'Chrome_WidgetWin_0' else bodies).append(int(hwnd))
             return True
 
         user32.EnumChildWindows(self.application.handle, callback_type(collect), 0)
+        if len(hosts) != 1:
+            raise RuntimeError("Embedded content host HWND is absent or ambiguous")
+        if not render:
+            return hosts[0]
+        # A personal album can be a nested native MMUI canvas inside the tab
+        # host. The main MMUI canvas also contains this point, so ancestry is
+        # required in addition to rectangle containment.
+        def within_host(hwnd):
+            seen = {hwnd}
+            for _ in range(16):
+                # Qt may retain popup styles after embedding. GetParent and
+                # IsChild can then omit this edge; GA_PARENT follows the real
+                # parent relation independent of those styles.
+                parent = int(user32.GetAncestor(hwnd, 1) or 0)
+                if parent == hosts[0]:
+                    return True
+                if not parent or parent == self.application.handle or parent in seen:
+                    return False
+                seen.add(parent)
+                hwnd = parent
+            return False
+        matches = [hwnd for hwnd in bodies if within_host(hwnd)]
         if len(matches) != 1:
             raise RuntimeError("Embedded content HWND is absent or ambiguous")
         return matches[0]
@@ -274,8 +296,9 @@ class KeyboardOnlyDriver:
         self._wm_key(VK_RETURN, True)
         self._wm_key(VK_RETURN, False)
 
-    def wheel_window_fraction(self, fx: float, fy: float, notches: int = 3) -> None:
-        """Post a normal mouse-wheel message to the top-level WeChat HWND.
+    def wheel_window_fraction(self, fx: float, fy: float, notches: int = 3, *,
+                              embedded_content: bool = False) -> None:
+        """Post normal wheel messages to the caller-selected WeChat surface.
 
         ``notches > 0`` means scroll down. This neither moves the cursor nor
         uses input injection; Qt receives its ordinary window message.
@@ -286,12 +309,17 @@ class KeyboardOnlyDriver:
             return
         with self.foreground_lease():
             sx, sy = self.point(fx, fy)
+            hwnd = (self._browser_pointer_hwnd(fx, fy, render=True)
+                    if embedded_content else self.application.handle)
             lparam = (sx & 0xFFFF) | ((sy & 0xFFFF) << 16)
-            delta = -120 * int(notches)
+            # MMUI can normalize a multi-detent delta to one step. Deliver
+            # ordinary wheel detents separately and let Qt consume each one.
+            delta = -120 if notches > 0 else 120
             wparam = (delta & 0xFFFF) << 16
-            if not user32.PostMessageW(self.application.handle, WM_MOUSEWHEEL, wparam, lparam):
-                raise RuntimeError("PostMessageW(WM_MOUSEWHEEL) failed")
-            self._settle_ui()
+            for _ in range(abs(int(notches))):
+                if not user32.PostMessageW(hwnd, WM_MOUSEWHEEL, wparam, lparam):
+                    raise RuntimeError("PostMessageW(WM_MOUSEWHEEL) failed")
+                self._settle_ui()
 
     def click_window_fraction(self, fx: float, fy: float) -> None:
         """Click a caller-observed self-drawn location through ``WM_LBUTTON*``.

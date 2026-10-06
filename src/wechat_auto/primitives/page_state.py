@@ -5,6 +5,7 @@ import re
 
 from wechat_auto.actions.semantics import PageId
 from wechat_auto.primitives.page_catalog import PAGE_CATALOG_VERSION, match_page_catalog
+from wechat_auto.primitives.moments_observation import has_calendar_rows
 
 REGIONS = {
     "navigation": (0, 0, .07, 1),
@@ -109,14 +110,34 @@ def classify_page(boxes: list[dict], size: tuple[int, int], *,
         page = "main_without_selected_chat"
     catalog_matches = match_page_catalog(boxes, size, bounds=zones,
                                          minimum_score=minimum_score)
+    # A personal album opened from a profile is an embedded right tab in
+    # current 4.x. Its header says Moments, with pinned/calendar rows below.
+    # Keep it separate from the central profile and from a generic feed.
+    if boundary and any(m['key'] == 'contact_profile' for m in catalog_matches):
+        album_items = regions['right_content']
+        left = zones['right_content'][0] * width
+        date_column_right = left + (width-left)*.25
+        dated = [item for item in album_items if
+                 boxes[item['box_index']]['x'] <= date_column_right and
+                 boxes[item['box_index']]['y'] > height*.12]
+        pinned = any(re.sub(r'\s+', '', item['text']) == '置顶' for item in dated)
+        calendar = has_calendar_rows([re.sub(r'\s+', '', item['text']) for item in dated])
+        album_header = [item for item in regions['right_panel_header']
+                        if re.sub(r'\s+', '', item['text']) == '朋友圈']
+        if len(album_header) == 1 and (pinned or calendar):
+            tab = {'type': 'moments_person', 'evidence_box_index': album_header[0]['box_index']}
+            content_tabs.append(tab)
+            panel_types.append('moments_person')
+            panel_evidence.extend(album_header)
     embedded_pages = {"search": (PageId.WEB_SEARCH, "web_search"),
                       "channels": (PageId.CHANNELS, "channels"),
                       "official_account": (PageId.OFFICIAL_ACCOUNTS, "official_accounts"),
-                      "mini_program": (PageId.MINI_PROGRAM, "mini_program")}
+                      "mini_program": (PageId.MINI_PROGRAM, "mini_program"),
+                      "moments_person": (PageId.MOMENTS_PERSON, "moments_person")}
     for tab in content_tabs:
         pid, key = embedded_pages[tab["type"]]
         catalog_matches.append({"page_id": int(pid), "key": key, "label": key,
-                                "layer": "panel", "parent": "chat", "state": "candidate",
+                                "layer": "panel", "parent": "contact_profile" if key == 'moments_person' else "chat", "state": "candidate",
                                 "presentation": "embedded_right_tab",
                                 "evidence_box_indices": [tab["evidence_box_index"]],
                                 "verification": "boundary_and_tab_header",

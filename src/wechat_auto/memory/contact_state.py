@@ -68,6 +68,14 @@ class ContactState:
         stop = (not presence or presence[0] in {'missing', 'inferred_removed', 'confirmed_removed', 'unknown'}
                 or current['local_contact'] == 'removed' or current['local_block'] == 'blocked'
                 or current['peer_contact'] == 'removed' or current['peer_block'] == 'blocked')
+        # A single absence allows a read-only personal-Contacts review, whose
+        # BasicSkill path must verify the exact visible alias before the album.
+        # It does not restore friendship or authorize sending.
+        moments_stop = (not presence or presence[0] not in {'active', 'restored', 'missing'}
+                        or current['local_contact'] == 'removed' or current['local_block'] == 'blocked'
+                        or current['peer_contact'] == 'removed' or current['peer_block'] == 'blocked')
         return {'person_id': person_id, 'presence': presence[0] if presence else 'unknown',
                 'current': current, 'history': rows, 'automatic_send_blocked': bool(stop),
+                'moments_load_blocked': bool(moments_stop),
+                'moments_identity_review_required': bool(presence and presence[0] == 'missing'),
                 'identity_verification_still_required': True}

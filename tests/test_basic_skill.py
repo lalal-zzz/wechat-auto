@@ -22,7 +22,10 @@ def test_click_and_scroll_are_hwnd_only(mock_app, mock_finder, config, session):
     assert skill.click(.2, .3)["transport"] == "hwnd"
     assert skill.scroll(.5, .5, 3)["transport"] == "hwnd"
     skill.keyboard_only.click_window_fraction.assert_called_once_with(.2, .3)
-    skill.keyboard_only.wheel_window_fraction.assert_called_once_with(.5, .5, 3)
+    skill.keyboard_only.wheel_window_fraction.assert_called_once_with(.5, .5, 3, embedded_content=False)
+    result = skill.scroll(.8, .7, 2, embedded_content=True)
+    assert result['embedded_content']
+    skill.keyboard_only.wheel_window_fraction.assert_called_with(.8, .7, 2, embedded_content=True)
 
 
 def test_action_receipt_uses_observed_coordinates(mock_app, mock_finder, config, session):

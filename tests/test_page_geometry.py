@@ -43,6 +43,21 @@ def test_flat_blank_page_has_no_input_candidate():
     assert geometry["right_panel_candidate"] is None
 
 
+@pytest.mark.parametrize('background,border', [(30, 34), (245, 241)])
+def test_album_divider_survives_cover_scrolling_out_in_low_contrast(background, border):
+    image = Image.new('RGB', (1000, 800), (background,)*3)
+    ImageDraw.Draw(image).line((650, 0, 650, 799), fill=(border,)*3)
+    geometry = observe_geometry(image)
+    assert geometry['right_panel_candidate']
+    assert geometry['right_panel_candidate']['fraction'] == pytest.approx(.65, abs=.005)
+    boxes = [{'text': text, 'x': x, 'y': y, 'w': 60, 'h': 20, 'score': .99}
+             for text, x, y in [('微信号:public_id', 350, 180), ('发消息', 350, 650),
+                               ('朋友圈', 700, 65), ('129月', 690, 400)]]
+    state = classify_page(boxes, image.size, geometry=geometry)
+    assert any(p['key'] == 'moments_person' for p in state['panels'])
+    assert not state['action_authorized']
+
+
 def test_geometry_only_observer_never_loads_ocr():
     observer = VisionAutomation(None, WeChatConfig())
     with (

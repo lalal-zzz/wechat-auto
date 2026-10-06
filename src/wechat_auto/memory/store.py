@@ -295,6 +295,12 @@ class MemoryStore:
             reason TEXT NOT NULL, evidence_ref TEXT NOT NULL, oldest_at TEXT NOT NULL,
             newest_at TEXT NOT NULL, observed_at TEXT NOT NULL, fingerprint TEXT NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS moments_section_coverage(
+            observation_key TEXT NOT NULL REFERENCES moments_coverage(observation_key),
+            section TEXT NOT NULL, status TEXT NOT NULL,
+            visibility_window TEXT NOT NULL, visibility_hint TEXT NOT NULL,
+            PRIMARY KEY(observation_key,section)
+        );
         CREATE TABLE IF NOT EXISTS moments_load_queue(
             person_id TEXT PRIMARY KEY REFERENCES people(person_id), status TEXT NOT NULL,
             last_error TEXT NOT NULL, updated_at TEXT NOT NULL

@@ -98,7 +98,7 @@ def list_page_catalog() -> list[dict]:
         row["actions_calibrated"] = False
         row["presentations"] = (
             ["embedded_main", "embedded_right_tab", "auxiliary_window"]
-            if spec.key in {"channels", "web_search", "article", "mini_program", "official_accounts"}
+            if spec.key in {"channels", "web_search", "article", "mini_program", "official_accounts", "moments_person"}
             else ["embedded_overlay", "auxiliary_popup"] if spec.layer in {"overlay", "panel"}
             else ["auxiliary_window"] if spec.layer == "window" else ["embedded_main"])
         result.append(row)
@@ -144,5 +144,9 @@ def match_page_catalog(boxes: list[dict], size: tuple[int, int], *,
 def _anchor_matches(text: str, word: str) -> bool:
     normalized = re.sub(r"\s+", "", text).replace("：", ":")
     expected = word.replace("：", ":").rstrip(":")
+    # Paddle can merge the people icon into this specific management label.
+    # Keep this narrow; personal names and identity values stay exact.
+    if expected == "通讯录管理" and normalized in {"&通讯录管理", "＆通讯录管理"}:
+        return True
     return (normalized.rstrip(":") == expected
             or expected == "微信号" and normalized.startswith("微信号:"))

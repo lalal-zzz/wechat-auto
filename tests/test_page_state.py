@@ -46,3 +46,20 @@ def test_low_confidence_anchors_are_ignored():
 def test_invalid_capture_dimensions_are_rejected():
     with pytest.raises(ValueError):
         classify_page([], (0, 800))
+
+
+def test_personal_album_right_tab_preserves_central_profile_and_identity_boundary():
+    geometry = {'right_panel_candidate': {'fraction': .65}, 'vertical_separators': []}
+    profile = [box('微信号:public_id', 350, 180), box('发消息', 350, 650)]
+    tab = box('朋友圈', 700, 65)
+    for rows in ([box('置顶', 680, 500)], [box('10月', 690, 400), box('05', 690, 450)],
+                 [box('129月', 690, 400), box('059月', 690, 600)]):
+        state = classify_page(profile + [tab] + rows, (1000, 800), geometry=geometry)
+        assert state['page'] == 'contact_profile'
+        albums = [p for p in state['panels'] if p['key'] == 'moments_person']
+        assert len(albums) == 1 and albums[0]['presentation'] == 'embedded_right_tab'
+        assert state['action_authorized'] is False
+    for items in (profile + [tab], [tab, box('置顶', 680, 500)],
+                  profile + [tab, box('置顶', 400, 500)]):
+        state = classify_page(items, (1000, 800), geometry=geometry)
+        assert not any(p['key'] == 'moments_person' for p in state['panels'])

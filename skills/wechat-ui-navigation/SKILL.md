@@ -1,98 +1,57 @@
 ---
 name: wechat-ui-navigation
-description: Identify live WeChat HWNDs and layered pages, select an unambiguous target, navigate registered routes and restore known read-only windows. Use before contact or Moments UI collection; it does not authorize sending, changing settings or downloading media.
+description: 识别当前微信 HWND 与分层页面，选择唯一目标、执行已登记导航并恢复已知只读窗口。联系人或朋友圈 UI 采集前使用；不授权发送、修改设置或下载媒体。
 ---
 
-# WeChat windows and navigation
+# 微信窗口与页面导航
 
-Read [UI_WORKFLOW_RULES.md](../../docs/UI_WORKFLOW_RULES.md),
-[UI_PAGE_CATALOG.md](../../docs/UI_PAGE_CATALOG.md),
-[ACTION_VERIFICATION_MATRIX.md](../../docs/ACTION_VERIFICATION_MATRIX.md), and
-[WINDOW_NAVIGATION.md](../../docs/WINDOW_NAVIGATION.md) before live actions.
+实时 UI 操作前先阅读 [UI_WORKFLOW_RULES.md](references/UI_WORKFLOW_RULES.md)、[UI_PAGE_CATALOG.md](references/UI_PAGE_CATALOG.md)、[ACTION_VERIFICATION_MATRIX.md](references/ACTION_VERIFICATION_MATRIX.md) 和 [WINDOW_NAVIGATION.md](references/WINDOW_NAVIGATION.md)。
 
-## Identify and select
+## 识别窗口并选择目标
 
-1. Call `vision.inspect_windows` for the current process. It returns HWND roles,
-   owner/geometry/DPI, observed surfaces, composer state and operation availability;
-   it omits private OCR and titles. Unknown, stale or unavailable windows stop navigation.
-2. Select the desired page with `vision.resolve_window`. Distinguish
-   embedded_main, embedded_right_tab, auxiliary_window and auxiliary_popup.
-   Do not select the first candidate. If multiple windows match, identify the intended
-   presentation/HWND from the current inventory or ask the user to choose.
-3. `action_authorized=false` and `identity_verified=false` are deliberate. A recognized
-   page, matching title or current HWND does not authenticate a contact. Resolve stable
-   username/wxid locally, then verify the exact visible alias on the profile.
+1. 调用 `vision.inspect_windows` 检查当前进程窗口。回执包含 HWND 角色、所有者、几何信息、DPI、可见页面、输入框状态和可用操作；不会返回私有 OCR 内容或窗口标题。窗口未知、过期或不可用时停止。
+2. 调用 `vision.resolve_window` 选择目标页面。区分 `embedded_main`、`embedded_right_tab`、`auxiliary_window` 和 `auxiliary_popup`。不得选列表中的第一个候选；多个窗口都匹配时，用当前清单确定目标窗口，否则请用户选择。
+3. `action_authorized=false` 和 `identity_verified=false` 是刻意的安全状态。页面识别、标题匹配或当前 HWND 都不能证明联系人身份。须先从本地稳定 ID 确认 `username/wxid`，再核对资料页上精确显示的 alias。
 
-## Navigate and restore
+## 导航与恢复
 
-Use `actions.navigate_page(page, max_steps=6)` to execute a registered route.
-Every step uses BasicSkill and fresh CV/OCR coordinates, then inventories all windows
-again. The route stops at its first failed postcondition; it does not advance on a
-successful Windows message return alone. Inspect the steps and stop_reason.
+使用 `actions.navigate_page(page, max_steps=6)` 执行已登记路线。每一步都由 BasicSkill 使用当前帧 CV/OCR 坐标执行，之后重新盘点所有窗口。路线遇到首个后置条件失败即停止；Windows 消息返回成功本身不代表页面切换成功。检查每步结果和 `stop_reason`。
 
-Use `actions.restore_main_window` only when dismissing known menus and closing
-known read-only auxiliary content is within the task. It never closes the main
-client, changes settings, chooses a file or discards an editor/comment/publish draft.
-Handle such editors explicitly with the user; do not repeatedly press Escape.
+仅当任务允许关闭已知菜单或只读辅助内容时调用 `actions.restore_main_window`。它不会关闭主客户端、改设置、选文件或丢弃编辑器/评论/发布草稿。遇到这类编辑器时明确告知用户可用的处理方式；不要反复按 Escape。
 
-## Errors and recovery
+## 失败与恢复
 
-The recovery chain is fresh observation → recomputed CV/OCR target → guarded
-Agent image review. Failed sidebar receipts include `visual_review` when available.
-Otherwise call `vision.prepare_review(operation, hwnd, expected_alias)` explicitly.
-View its local image, then submit a pixel `[x,y,width,height]` and `source_page`
-with `actions.apply_review`. The single-use plan expires in 120 seconds and rejects
-changed HWND/PID/geometry/DPI/frame/target. It cannot send, delete, download, cancel
-an editor or execute an arbitrary click. BasicSkill performs and verifies the step.
+恢复顺序是：重新观察当前画面 → 根据新画面重新计算 CV/OCR 目标 → 使用受保护的 Agent 图片复核。侧栏失败回执若有 `visual_review`，应优先使用。否则明确调用 `vision.prepare_review(operation, hwnd, expected_alias)`，查看其本地图片，再把像素坐标 `[x,y,width,height]` 和 `source_page` 交给 `actions.apply_review`。
 
-For Contacts, call `actions.ensure_contacts_section`. Expand only the personal
-联系人 header and select exact rows beneath it. Never select 新的朋友, service or
-enterprise categories, and never fall back to mixed global search. Missing header,
-ambiguous row or absent exact profile alias stops the workflow, not deletion proof.
+单次复核计划在 120 秒后失效；若 HWND、PID、几何、DPI、帧或目标变化也会被拒绝。复核不得发送、删除、下载、取消编辑器或执行任意点击。实际动作与结果验证都必须由 BasicSkill 完成。
 
-- target_page_not_found: inspect loading/coverage and current page; not deletion evidence.
-- ambiguous_target_window: select a live HWND/presentation; never use list order.
-- unrecognized_auxiliary_window or window_observation_unavailable: preserve local
-  evidence, inspect that window; no fixed-coordinate fallback.
-- blocking_window_requires_handling, editor_requires_explicit_handling: report the
-  observed blocker and supported explicit operations. Do not auto-cancel user work.
-- operation_control_unimplemented or route_unavailable: report the missing detector/route;
-  a catalog entry is not an implemented button.
-- navigation_postcondition_failed or restore_postcondition_failed: stop the workflow
-  and keep its receipt. Never continue collecting in a guessed window.
-- Only contacts/chats/discover navigation may retry, bounded to two fresh observations
-  by default. Sending, menu toggles and closing never automatically retry.
+联系人导航调用 `actions.ensure_contacts_section`，只展开个人“联系人”分组，并选择其标题下的精确行。不得进入“新的朋友”、服务号或企业联系人分类，也不得退回混合全局搜索。缺标题、候选行歧义或资料页没有精确 alias 时停止；这不能作为删除好友的证据。
 
-## Moments handoff
+按回执处理错误：
 
-After window navigation is validated, use the profile/Moments workflow in
-[CONTACT_COLLECTION.md](../../docs/CONTACT_COLLECTION.md). The collector now resolves
-both the profile window and personal album independently. Keep exact alias proof,
-local_db coverage and ui_load coverage separate. Similar albums are not the same person.
-An empty/stalled album does not prove complete history or deletion.
-Remote media downloading is a separate explicitly confirmed operation. Opening and
-scrolling a page does not authorize a download or certify that every post was cached.
+- `target_page_not_found`：检查加载状态和当前页面；不能据此推断删除。
+- `ambiguous_target_window`：根据当前 HWND/展示状态重新选择；不能依赖列表顺序。
+- `unrecognized_auxiliary_window` 或 `window_observation_unavailable`：保留本地证据并检查窗口；禁止使用固定坐标回退。
+- `blocking_window_requires_handling` 或 `editor_requires_explicit_handling`：说明观察到的阻挡窗口和受支持操作；不得自动取消用户工作。
+- `operation_control_unimplemented` 或 `route_unavailable`：说明检测器或路线尚未实现；目录中有页面不代表按钮可用。
+- `navigation_postcondition_failed` 或 `restore_postcondition_failed`：停止并保留回执，不得猜测窗口后继续操作。
 
-## Version contract
+联系人/会话/发现页导航默认最多基于两次全新观察重试。发送、菜单切换和关闭动作不得自动重试。
 
-Package 0.8.1, window observer 1, page catalog 3, page actions 4.
-Read tool versions and operation availability; never reuse historical HWNDs or screenshot
-coordinates. Recognition does not certify clicking, and opening an album does not prove
-complete remote history. Raw frames and operational records are local-only.
+## 朋友圈采集交接
 
-## 数据更新与 Skill 联动
+导航验证后，按 [CONTACT_COLLECTION.md](references/CONTACT_COLLECTION.md) 执行资料与朋友圈采集。资料窗口和个人相册窗口须分别确认。`local_db` 覆盖与 `ui_load` 覆盖分开记录；相似相册不证明属于同一人。相册为空或加载停滞不代表历史完整或好友已删除。
 
-执行前读取共用的
-[数据新鲜度与联动规则](../../docs/SKILL_DATA_WORKFLOW.md)，先确定历史快照、当前
-状态、回复或 UI 模式。联动由当前 Agent 读取相关 SKILL.md 并执行其工具流程，
-不是自动派生代理、创建定时任务或扩大授权。
+联网下载媒体是独立操作，必须逐项取得明确确认。打开或滚动相册不授权下载，也不证明所有帖子已缓存。
 
-每一步 UI 操作都重新观察 HWND、页面、控件与几何，不能复用上个 Skill 的
-截图坐标。数据同步的新鲜度不能替代当前帧证明，页面识别也不替代联系人身份。
-联系人定位前需要稳定身份时联动 [wechat-identity-audit](../wechat-identity-audit/SKILL.md)，
-本地映射更新交给 [wechat-sync](../wechat-sync/SKILL.md)。
-个人分组/资料身份验证成功后，把当前目标与回执交给
-[wechat-profile-moments](../wechat-profile-moments/SKILL.md) 补采资料或加载相册；
-回复页面核验只交给 [wechat-reply-monitor](../wechat-reply-monitor/SKILL.md)，不代其发送。
-截图复核仅解决白名单导航的一步定位；过期帧、未知窗口、同名歧义或后置失败
-停止并交接失败状态，不推进下一联系人，不把图片坐标当成持续授权。
+## 数据工作流与交接
+
+执行前阅读[数据新鲜度与联动规则](references/SKILL_DATA_WORKFLOW.md)，确定请求类型。每一步都重新观察 HWND、页面、控件和窗口几何，不复用其他 Skill 的截图坐标。同步新鲜度不能替代当前帧证明，页面识别也不能替代联系人身份核验。
+
+联系人定位需要稳定身份时联动 wechat-identity-audit；本地映射更新交给 wechat-sync。个人分组和资料身份核验成功后，把当前目标和回执交给 wechat-profile-moments；回复页面核验交给 wechat-reply-monitor，本 Skill 不代其发送。
+
+图片复核只解决白名单导航中的一步定位。帧过期、窗口未知、同名歧义或后置验证失败时停止并交接失败状态；不得继续下一个联系人，也不得把图片坐标视为持续授权。
+
+## 随包资源范围
+
+执行规则、参考文档与模板只读取本 Skill 目录中的 `references/`、`assets/` 和已提供的 `scripts/`，相对路径从本 Skill 目录解析。不能跨目录借用另一个 Skill 的参考资源；缺少必需随包资源时报告缺失，维护时补齐本目录副本。其他 Skill 名称仅表示流程职责与上下游，不代替本目录资源。项目运行接口、正式数据路径与项目命令是运行依赖，不是外部指令来源；不为打包复制私人数据。

@@ -14,8 +14,11 @@
 
 ## 共用页面、搜索与收件人规则
 
-- 所有 Skill 涉及 UI、联系人状态或回复时，先读取 `docs/UI_WORKFLOW_RULES.md`；
-  页面类型和验收分别读取 `docs/UI_PAGE_CATALOG.md`、`docs/ACTION_VERIFICATION_MATRIX.md`。
+- 所有 Skill 涉及 UI、联系人状态或回复时，先读取各自目录 `references/` 内随包提供的
+  `UI_WORKFLOW_RULES.md`；页面类型和验收分别读取本 Skill 的
+  `UI_PAGE_CATALOG.md`、`ACTION_VERIFICATION_MATRIX.md`。执行规则由相关 Skill 的
+  `SKILL.md` 与 `references/` 维护；共用规则变更须同步实际依赖它的 Skill 随包文档。
+  不再以 `docs/` 作为 Skill 执行规则的维护来源。
 - 私聊优先通讯录定位→资料身份核验→进入聊天。通讯录搜索也可能是混合分区弹窗，
   只接受联系人分区精确候选；网络搜索、历史消息和同名群不能充当收件人。
 - `username/wxid` 是本地身份，公开微信号是 `alias`，二者不能混作同一字段。
@@ -25,7 +28,7 @@
 - 发送前重新核验收件人、页面、输入区域与确切正文；确认令牌不能替代身份核验。
   基础 `send_text`/`open_chat` 接口不代表完整稳定身份链路已验收，未完成项见 WA-005。
 - 静态 Markdown 是共用规则，不能当成动态坐标。窗口尺寸相同也可能发生内部布局变化。
-- 窗口角色、分层页面、目标选择与恢复读取 `docs/WINDOW_NAVIGATION.md`。
+- 窗口角色、分层页面、目标选择与恢复读取当前 Skill 的 `references/WINDOW_NAVIGATION.md`。
   联系人导航只在个人“联系人”分组下查找，先确认展开；不得点击“新的朋友”、企业联系人、
   公众号/服务号或自动转到混合搜索。无法定位时保存新截图，交给 Agent 复核。
 - Agent 的图片框也必须经 BasicSkill 执行：绑定当前 HWND、页面、帧与短期单次 review；
@@ -213,7 +216,7 @@ data/memory/
 
 ## 硬性规则
 
-联系人/朋友圈两路采集遵循 `docs/CONTACT_COLLECTION.md`：本地 cached_only 与 UI
+联系人/朋友圈两路采集遵循当前 Skill 的 `references/CONTACT_COLLECTION.md`：本地 cached_only 与 UI
 partial/restricted/stalled 分开保存。删除/拉黑按本人/对方方向记录；UI 搜索失败、
 相册空白和权限提示不能推断好友删除。状态记录不能代替真实操作确认或稳定身份核验。
 Memory schema 3 增量迁移保留历史。导航使用当前截图 OpenCV 图标和 OCR 文字框；
@@ -233,8 +236,8 @@ Memory schema 3 增量迁移保留历史。导航使用当前截图 OpenCV 图�
 
 ## 数据更新与 Skill 联动
 
-- 所有归档、分析、人物画像、时间线、仪表盘和回复 Skill 先读取
-  `docs/SKILL_DATA_WORKFLOW.md`，其 SKILL.md 必须写明自己的上游、下游与停止条件。
+- 所有归档、分析、人物画像、时间线、仪表盘和回复 Skill 先读取自身
+  `references/SKILL_DATA_WORKFLOW.md` 随包副本，其 SKILL.md 必须写明自己的上游、下游与停止条件。
 - 区分来源同步、归档索引、分析更新与 UI 当前帧。`sync.index_archives` 仅索引
   已有归档，不替代微信增量采集；`charts.refresh` 仅生成视图，不执行分析。
 - 按用户请求选择历史快照、当前状态、回复或 UI 模式。历史分析说明固定证据范围；

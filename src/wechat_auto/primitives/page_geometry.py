@@ -24,7 +24,10 @@ def observe_geometry(image) -> dict:
     # Difference coverage detects them without relying on a specific theme.
     differences = np.abs(np.diff(gray.astype(np.int16), axis=1))
     strip = differences[int(height * .15):int(height * .7)]
-    coverage = (strip >= 8).mean(axis=0)
+    # Dark album dividers can have only four levels of luminance contrast
+    # after the cover image scrolls away. Still require a long continuous
+    # edge, rather than treating text or a short photo border as a divider.
+    coverage = (strip >= 4).mean(axis=0)
     indices = np.flatnonzero(coverage >= .70)
     separators = []
     for x in indices:

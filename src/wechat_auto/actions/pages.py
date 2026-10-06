@@ -39,7 +39,7 @@ OPERATIONS = (
                   ("mini_program_list",), "ocr", ("小程序",)),
     PageOperation("open_contact_more", ("contact_profile",), ("contact_more",)),
     PageOperation("open_contact_moments", ("contact_profile",), ("moments_person",),
-                  "ocr", ("朋友圈", "相册")),
+                  "profile_album", ("朋友圈", "相册")),
     PageOperation("open_remark_editor", ("contact_more",), ("contact_remark",), "ocr", ("设置备注和标签",)),
     PageOperation("open_permissions", ("contact_more",), ("contact_permissions",), "ocr", ("设置朋友权限",)),
     PageOperation("open_settings", ("main_menu",), ("settings",), "ocr", ("设置",)),
@@ -48,7 +48,7 @@ OPERATIONS = (
     PageOperation("open_chat_details", ("chat", "file_transfer"), ("chat_details",)),
     PageOperation("open_history", ("chat", "group_chat", "file_transfer"), ("chat_history",)),
     PageOperation("open_emoji_panel", ("chat", "group_chat", "file_transfer"), ("emoji_panel",)),
-    PageOperation("close_content_tab", ("web_search", "article", "channels", "mini_program", "official_accounts"),
+    PageOperation("close_content_tab", ("web_search", "article", "channels", "mini_program", "official_accounts", "moments_person"),
                   MAIN_PAGES, method="tab_close", require_source_exit=True),
     # Editor cancellation discards local draft fields; explicit UI cancel only.
     PageOperation("cancel", ("contact_remark", "contact_permissions", "contact_tags",

@@ -3,7 +3,7 @@ import pytest
 from PIL import Image
 
 from wechat_auto.primitives.navigation_templates import TEMPLATES
-from wechat_auto.primitives.page_controls import find_navigation_control
+from wechat_auto.primitives.page_controls import find_navigation_control, observe_selected_contacts
 
 
 def sidebar(size, *, position=(42, 300), scale=1, light=False, duplicate=False):
@@ -49,3 +49,35 @@ def test_missing_duplicate_and_unimplemented_controls_do_not_supply_coordinates(
         find_navigation_control(image, 'open_contacts')
     with pytest.raises(RuntimeError, match='not implemented'):
         find_navigation_control(image, 'open_contact_more')
+
+
+def test_selected_contacts_glyph_observes_page_without_tree_headers():
+    image, _ = sidebar((1410, 904))
+    rgb = np.array(image)
+    rgb[(rgb[:, :, 0] == 150) & (rgb[:, :, 1] == 150)] = (0, 180, 100)
+    state = {'page': 'unknown', 'overlays': [], 'panels': [], 'content_windows': [],
+             'action_authorized': False}
+    observe_selected_contacts(Image.fromarray(rgb), state)
+    assert state['page'] == 'contacts'
+    assert state['selected_navigation']['verification'] == 'current_selected_green_glyph'
+    assert not state['action_authorized']
+
+
+def test_inactive_ambiguous_or_blocked_contacts_glyph_never_promotes_page():
+    inactive, _ = sidebar((1410, 904))
+    state = {'page': 'unknown'}
+    observe_selected_contacts(inactive, state)
+    assert state['page'] == 'unknown'
+    rgb = np.array(inactive)
+    rgb[(rgb[:, :, 0] == 150) & (rgb[:, :, 1] == 150)] = (0, 180, 100)
+    active = Image.fromarray(rgb)
+    for blocker in ('overlays', 'panels', 'content_windows'):
+        state = {'page': 'unknown', blocker: [{'key': 'unknown_content'}]}
+        observe_selected_contacts(active, state)
+        assert state['page'] == 'unknown'
+    duplicate, _ = sidebar((1410, 904), duplicate=True)
+    rgb = np.array(duplicate)
+    rgb[(rgb[:, :, 0] == 150) & (rgb[:, :, 1] == 150)] = (0, 180, 100)
+    state = {'page': 'unknown'}
+    observe_selected_contacts(Image.fromarray(rgb), state)
+    assert state['page'] == 'unknown'

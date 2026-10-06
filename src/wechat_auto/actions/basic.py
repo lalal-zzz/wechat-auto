@@ -609,7 +609,7 @@ class BasicSkill(BaseSkill):
         point = None
         used_layout = "observed_frame"
         try:
-            if spec.method in {"ocr", "ocr_cancel"}:
+            if spec.method in {"ocr", "ocr_cancel", "profile_album"}:
                 boxes = [b for b in before["boxes"] if b.get("score", 0) >= .65
                          and re.sub(r"\s+", "", b.get("text", "")) in spec.anchors]
                 # Discover labels must be in the navigation list, not body text.
@@ -619,7 +619,17 @@ class BasicSkill(BaseSkill):
                     boxes = [b for b in boxes if bounds[0] <= (b["x"] + b["w"] / 2) / width <= bounds[2]]
                 if len(boxes) != 1:
                     raise RuntimeError("Page control absent or ambiguous; action stopped")
-                point = self._box_center_fraction(boxes[0], tuple(before["state"]["size"]))
+                if spec.method == 'profile_album':
+                    from wechat_auto.primitives.page_controls import find_contact_album_entry
+                    image = observer.capture()
+                    if image is None or tuple(image.size) != tuple(before['state']['size']):
+                        raise StaleFrameError('Profile changed before album control observation')
+                    split = before['state']['geometry'].get('right_panel_candidate')
+                    control = find_contact_album_entry(image, boxes[0], right=split['x'] if split else None)
+                    point = tuple(control['window_fraction'])
+                    used_layout = control['method']
+                else:
+                    point = self._box_center_fraction(boxes[0], tuple(before["state"]["size"]))
                 driver.click_window_fraction(*point)
             elif spec.method == "visual_control":
                 from wechat_auto.primitives.page_controls import find_navigation_control
@@ -749,9 +759,10 @@ class BasicSkill(BaseSkill):
             semantic_target="22.03", requires_database_resync=True,
         )
 
-    def scroll(self, x: float, y: float, notches: int) -> dict:
-        self.keyboard_only.wheel_window_fraction(x, y, notches)
-        return self._receipt("scroll", point=(x, y), notches=notches)
+    def scroll(self, x: float, y: float, notches: int, *, embedded_content: bool = False) -> dict:
+        self.keyboard_only.wheel_window_fraction(x, y, notches, embedded_content=embedded_content)
+        return self._receipt("scroll", point=(x, y), notches=notches,
+                             embedded_content=embedded_content)
 
     def right_click(self, x: float, y: float) -> dict:
         self.keyboard_only.right_click_window_fraction(x, y)
@@ -918,18 +929,18 @@ class BasicSkill(BaseSkill):
 
     def load_contact_moments(self, contact: str, expected_alias: str, *, max_pages: int = 5,
                              wechat_id: str | None = None,
-                             profiles_database: str = 'data/wechat_contact_profiles.sqlite3') -> dict:
+                             profiles_database: str = 'data/wechat_contact_profiles.sqlite3',
+                             max_contact_scroll_pages: int = 30) -> dict:
         """Verified profile → personal album → bounded HWND scrolling.
 
         Stable local identity must be resolved by the caller. Only the profile's
         exact visible alias authenticates entry; a title/name alone never does.
         Screen stability means stalled, not a complete server download.
         """
-        import hashlib
-
         from wechat_auto.actions.pages import page_keys
+        from wechat_auto.primitives.moments_observation import merge_album_sections
         from wechat_auto.primitives.vision import VisionAutomation
-        if not expected_alias or not 1 <= max_pages <= 30:
+        if not expected_alias or not 1 <= max_pages <= 30 or not 1 <= max_contact_scroll_pages <= 30:
             raise ValueError('Visible alias and bounded page count are required')
         for window in self.inspect_windows():
             if window.get('status') != 'recognized':
@@ -939,7 +950,8 @@ class BasicSkill(BaseSkill):
         navigation = self.page_operation('open_contacts')
         if not navigation['success']:
             raise RuntimeError('Contacts navigation failed')
-        self.open_contact_profile(contact, expected_alias, navigate=False)
+        self.open_contact_profile(contact, expected_alias, navigate=False,
+                                  max_contact_scroll_pages=max_contact_scroll_pages)
         profile = self.resolve_target_window('contact_profile')
         if not profile['ok']:
             raise RuntimeError('Contact profile window absent or ambiguous')
@@ -958,33 +970,46 @@ class BasicSkill(BaseSkill):
         observer = VisionAutomation(target, self._config, shot_dir=self._session.screenshot_dir)
         skill = self if target.handle == self._app.handle else BasicSkill(target, self._config, self._session)
         previous, repeated, pages = '', 0, 0
+        sections = {}
         status, reason = 'partial', 'page_budget'
         for _ in range(max_pages):
             observation = observer.observe_page()
             if not observation.get('ok') or 'moments_person' not in page_keys(observation['state']):
                 raise RuntimeError('Personal Moments page changed during loading')
-            texts = [re.sub(r'\s+', '', b.get('text', '')) for b in observation['boxes']]
-            if any('仅展示最近' in t or '不让你看' in t for t in texts):
+            visible = observation.get('album_observation')
+            if not visible:
+                raise RuntimeError('Personal album section observation unavailable')
+            merge_album_sections(sections, visible['sections'])
+            if visible['access_denied']:
                 status, reason = 'restricted', 'visible_access_restriction'
                 break
-            fingerprint = hashlib.sha256('\n'.join(texts).encode()).hexdigest()
+            fingerprint = visible['content_fingerprint']
             repeated = repeated + 1 if fingerprint == previous else 0
             previous = fingerprint
             if repeated >= 2:
-                status, reason = 'stalled', 'unchanged_visible_text'
+                status, reason = 'stalled', 'unchanged_album_frame'
                 break
             # The personal album is the verified content window; never scroll
             # the main chat/list when album ownership is ambiguous.
-            skill.scroll(.75, .7, 4)
+            left, top, right, bottom = visible['body_bounds']
+            skill.scroll((left+right)/2, top+(bottom-top)*.7, 4,
+                         embedded_content=album['target']['presentation'] == 'embedded_right_tab')
             pages += 1
             time.sleep(max(1., self._config.scroll_delay))
         final = observer.observe_page()
         if not final.get('ok') or 'moments_person' not in page_keys(final['state']):
             raise RuntimeError('Personal Moments page changed after the final scroll')
+        if final.get('album_observation'):
+            merge_album_sections(sections, final['album_observation']['sections'])
+            if final['album_observation']['access_denied']:
+                status, reason = 'restricted', 'visible_access_restriction'
         evidence = observer.shot('moments', 'personal-load-final')
         closed = False
         if target.handle != self._app.handle:
             closed = self.page_operation('close', hwnd=target.handle,
+                                         expected_page='moments_person')['success']
+        elif album['target']['presentation'] == 'embedded_right_tab':
+            closed = self.page_operation('close_content_tab', hwnd=target.handle,
                                          expected_page='moments_person')['success']
         return self._receipt('load_contact_moments', success=True, sent=False,
                              coverage_status=status, stop_reason=reason, pages=pages,
@@ -992,6 +1017,7 @@ class BasicSkill(BaseSkill):
                              requires_navigation_restore=not closed,
                              album_hwnd=target.handle, album_presentation=album['target']['presentation'],
                              profile_capture=profile_capture,
+                             section_coverage=list(sections.values()),
                              server_history_complete=False, automatic_retry=False)
 
     def _open_and_verify_contact_box(self, box: dict, expected_wechat_id: str | None) -> dict:
@@ -1005,17 +1031,15 @@ class BasicSkill(BaseSkill):
                 "result_point": list(point), "sent": False}
 
     def _observe_contact_section(self) -> dict:
-        from wechat_auto.primitives.contact_section import observe_contact_section
-        from wechat_auto.primitives.page_geometry import observe_geometry
-        from wechat_auto.primitives.page_state import classify_page
-
-        image = self.vision.capture()
-        if image is None:
-            raise RuntimeError('Contact section capture unavailable')
-        boxes = self.vision.recognize_image(image)
-        state = classify_page(boxes, image.size, geometry=observe_geometry(image))
-        return {'section': observe_contact_section(image, boxes, state), 'state': state,
-                'boxes': boxes, 'size': image.size}
+        observation = self.vision.observe_page()
+        if not observation.get('ok'):
+            raise RuntimeError('Contact section observation unavailable')
+        state, boxes = observation['state'], observation['boxes']
+        section = state.get('contact_section')
+        if section is None:
+            section = {'ok': False, 'error': 'contacts_page_not_observed'}
+        return {'section': section, 'state': state,
+                'boxes': boxes, 'size': tuple(state['size'])}
 
     def ensure_contacts_section(self) -> dict:
         """Expand only the exact personal Contacts heading, never New Friends."""

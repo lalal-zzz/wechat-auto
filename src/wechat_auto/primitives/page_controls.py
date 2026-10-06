@@ -80,6 +80,56 @@ def find_search_clear(image, field: dict) -> list[tuple[int, int]]:
             if abs(cy - h / 2) < .15 * h and .3 * h <= x + w - (left + cx) <= .8 * h]
 
 
+def observe_selected_contacts(image, state: dict) -> None:
+    """Observe the current selected Contacts glyph when tree headers scroll away."""
+    import numpy as np
+
+    if state.get('page') != 'unknown' or any(state.get(k) for k in ('overlays', 'panels', 'content_windows')):
+        return
+    try:
+        control = find_navigation_control(image, 'open_contacts')
+    except NavigationControlError:
+        return
+    x, y, w, h = (control[k] for k in ('x', 'y', 'w', 'h'))
+    patch = np.asarray(image.convert('RGB').crop((round(x-w/2), round(y-h/2),
+                                                 round(x+w/2), round(y+h/2)))).astype(float)
+    green = (patch[:, :, 1] > 100) & (patch[:, :, 1] > patch[:, :, 0]*1.5) & (patch[:, :, 1] > patch[:, :, 2]*1.2)
+    if green.mean() < .15:
+        return
+    from wechat_auto.actions.semantics import PageId
+    state.update(page='contacts', page_id=int(PageId.CONTACTS),
+                 selected_navigation={'page': 'contacts', 'verification': 'current_selected_green_glyph',
+                                      'control': control})
+
+
+def find_contact_album_entry(image, label: dict, *, right: int | None = None) -> dict:
+    """Find the unique thumbnail strip beside the exact profile Moments label."""
+    import cv2
+    import numpy as np
+
+    width, height = image.size
+    cx = round(label['x'] + label['w'] + label['h']*.2)
+    cy = label['y'] + label['h']/2
+    top, bottom = max(0, round(cy-label['h']*1.2)), min(height, round(cy+label['h']*1.2))
+    right = min(width, right or width)
+    if right <= cx or bottom <= top:
+        raise NavigationControlError('Personal album thumbnail region unavailable')
+    patch = np.asarray(image.convert('RGB'))[top:bottom, cx:right]
+    gray = cv2.cvtColor(patch, cv2.COLOR_RGB2GRAY)
+    edges = cv2.Canny(gray, 20, 60)
+    columns = ((edges > 0).sum(axis=0) >= 3) | (patch.std(axis=(0, 2)) > 18)
+    mask = np.uint8(columns)[None, :]*255
+    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, np.ones((1, max(3, round(label['h']*.3))), dtype='uint8'))
+    segments = [cv2.boundingRect(c) for c in cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)[0]]
+    candidates = [(x, w) for x, _y, w, _h in segments if w >= label['h']*2]
+    if len(candidates) != 1:
+        raise NavigationControlError('Personal album thumbnail strip absent or ambiguous')
+    x, w = candidates[0]
+    return {'x': cx+x, 'y': top, 'w': w, 'h': bottom-top,
+            'window_fraction': [(cx+x+w/2)/width, cy/height],
+            'method': 'current_profile_label_and_thumbnail_texture'}
+
+
 def observe_tab_closes(image, boxes: list[dict], state: dict) -> None:
     """Attach unique diagonal-cross candidates beside each observed tab label."""
     import cv2

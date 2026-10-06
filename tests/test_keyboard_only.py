@@ -87,13 +87,76 @@ def test_search_mode_is_explicit():
         KeyboardOnlyDriver(_FakeApplication(), input_mode="physical")
 
 
-def test_wheel_posts_normal_window_message():
+@pytest.mark.parametrize('notches,delta', [(2, -120), (-3, 120), (0, 0)])
+def test_wheel_posts_normal_window_detents_in_each_direction(notches, delta):
     driver = KeyboardOnlyDriver(_FakeApplication())
     driver._rect = lambda: (0, 0, 1000, 800)
-    with patch("wechat_auto.primitives.keyboard_only.user32") as api:
+    with patch("wechat_auto.primitives.keyboard_only.user32") as api, \
+         patch.object(driver, '_settle_ui') as settle:
         api.PostMessageW.return_value = 1
-        driver.wheel_window_fraction(.65, .72, 2)
-    assert api.PostMessageW.called
+        driver.wheel_window_fraction(.65, .72, notches)
+    assert api.PostMessageW.call_count == abs(notches)
+    assert settle.call_count == abs(notches)
+    for call in api.PostMessageW.call_args_list:
+        assert call.args == (1, 0x20A, (delta & 0xffff) << 16, 650 | (576 << 16))
+
+
+def test_wheel_rejection_stops_remaining_detents():
+    driver = KeyboardOnlyDriver(_FakeApplication(), foreground_mode='never')
+    driver._rect = lambda: (0, 0, 1000, 800)
+    with patch('wechat_auto.primitives.keyboard_only.user32') as api, \
+         patch.object(driver, '_settle_ui') as settle:
+        api.PostMessageW.side_effect = [1, 0, 1]
+        with pytest.raises(RuntimeError, match='WM_MOUSEWHEEL'):
+            driver.wheel_window_fraction(.65, .72, 3)
+        assert api.PostMessageW.call_count == 2
+        settle.assert_called_once()
+
+
+def test_embedded_wheel_routes_to_unique_render_hwnd_with_screen_coordinates():
+    driver = KeyboardOnlyDriver(_FakeApplication(), foreground_mode='never')
+    driver._rect = lambda: (100, 200, 1100, 1000)
+    with patch.object(driver, '_browser_pointer_hwnd', return_value=42) as resolve, \
+         patch('wechat_auto.primitives.keyboard_only.user32') as api, \
+         patch.object(driver, '_settle_ui'):
+        api.PostMessageW.return_value = 1
+        driver.wheel_window_fraction(.8, .7, 2, embedded_content=True)
+        resolve.assert_called_once_with(.8, .7, render=True)
+        assert all(c.args == (42, 0x20a, (-120 & 0xffff) << 16, 900 | (760 << 16))
+                   for c in api.PostMessageW.call_args_list)
+
+
+def test_ambiguous_embedded_wheel_does_not_fall_back_to_main():
+    driver = KeyboardOnlyDriver(_FakeApplication(), foreground_mode='never')
+    driver._rect = lambda: (0, 0, 1000, 800)
+    with patch.object(driver, '_browser_pointer_hwnd', side_effect=RuntimeError('ambiguous')), \
+         patch('wechat_auto.primitives.keyboard_only.user32') as api:
+        with pytest.raises(RuntimeError, match='ambiguous'):
+            driver.wheel_window_fraction(.8, .7, 2, embedded_content=True)
+        api.PostMessageW.assert_not_called()
+
+
+@pytest.mark.parametrize('body_class', ['MMUIRenderSubWindowHW', 'Chrome_RenderWidgetHostHWND'])
+def test_embedded_body_requires_host_ancestry_not_just_point_containment(body_class):
+    driver = KeyboardOnlyDriver(_FakeApplication(), foreground_mode='never')
+    driver._rect = lambda: (0, 0, 1000, 800)
+    classes = {42: 'Chrome_WidgetWin_0', 43: body_class, 44: 'MMUIRenderSubWindowHW'}
+    with patch('wechat_auto.primitives.keyboard_only.user32') as api:
+        api.GetClassNameW.side_effect = lambda hwnd, buf, size: setattr(buf, 'value', classes[int(hwnd)])
+        def rect(hwnd, ptr):
+            ptr._obj.left, ptr._obj.top, ptr._obj.right, ptr._obj.bottom = (0, 0, 1000, 800)
+            return 1
+        api.GetWindowRect.side_effect = rect
+        api.IsWindowVisible.return_value = 1
+        api.EnumChildWindows.side_effect = lambda hwnd, callback, param: [callback(h, param) for h in classes]
+        api.GetParent.return_value = 0
+        api.IsChild.return_value = 0
+        parents = {43: 45, 45: 42, 44: 1, 1: 0}
+        api.GetAncestor.side_effect = lambda hwnd, flag: parents.get(hwnd, 0)
+        assert driver._browser_pointer_hwnd(.8, .7, render=True) == 43
+        parents[44] = 42
+        with pytest.raises(RuntimeError, match='ambiguous'):
+            driver._browser_pointer_hwnd(.8, .7, render=True)
 
 
 def test_wmchar_paste_and_supported_key_stay_on_hwnd():

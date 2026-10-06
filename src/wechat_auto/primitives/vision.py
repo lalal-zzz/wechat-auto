@@ -493,15 +493,21 @@ class VisionAutomation:
         except Exception as exc:
             return {"ok": False, "error": "ocr_infrastructure_failure",
                     "error_type": type(exc).__name__}
-        from wechat_auto.primitives.page_controls import observe_tab_closes
+        from wechat_auto.primitives.page_controls import observe_selected_contacts, observe_tab_closes
 
         state = classify_page(boxes, image.size, geometry=observe_geometry(image))
+        observe_selected_contacts(image, state)
         observe_tab_closes(image, boxes, state)
         if state['page'] in {'contacts', 'contact_profile', 'new_friends'}:
             from wechat_auto.primitives.contact_section import observe_contact_section
             state['contact_section'] = observe_contact_section(image, boxes, state)
-        return {"ok": True, "engine": self._ocr.name if include_ocr else "geometry_only",
-                "boxes": boxes, "state": state}
+        result = {"ok": True, "engine": self._ocr.name if include_ocr else "geometry_only",
+                  "boxes": boxes, "state": state}
+        from wechat_auto.actions.pages import page_keys
+        if 'moments_person' in page_keys(state):
+            from wechat_auto.primitives.moments_observation import observe_album_sections
+            result['album_observation'] = observe_album_sections(image, boxes, state)
+        return result
 
     def find_text(
         self,

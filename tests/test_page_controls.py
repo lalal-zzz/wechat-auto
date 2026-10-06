@@ -52,3 +52,23 @@ def test_two_close_glyphs_are_ambiguous_and_do_not_produce_a_control():
     state = {'right_panel': {'tabs': [{'evidence_box_index': 0}]}}
     observe_tab_closes(image, [{'x': 120, 'y': 55, 'w': 100, 'h': 20}], state)
     assert 'close_candidate' not in state['right_panel']['tabs'][0]
+
+
+def test_profile_album_entry_uses_current_thumbnail_strip_and_rejects_ambiguity():
+    import numpy as np
+    from wechat_auto.primitives.page_controls import find_contact_album_entry
+
+    image = Image.new('RGB', (1000, 800), (30, 30, 30))
+    label = {'x': 260, 'y': 250, 'w': 48, 'h': 16}
+    rng = np.random.default_rng(5)
+    texture = Image.fromarray(rng.integers(0, 255, size=(38, 220, 3), dtype=np.uint8))
+    image.paste(texture, (360, 240))
+    control = find_contact_album_entry(image, label, right=650)
+    assert 358 <= control['x'] <= 362
+    assert control['window_fraction'][0] == pytest.approx(.47, abs=.005)
+    assert control['method'] == 'current_profile_label_and_thumbnail_texture'
+    with pytest.raises(RuntimeError, match='absent or ambiguous'):
+        find_contact_album_entry(Image.new('RGB', (1000, 800), (30, 30, 30)), label)
+    image.paste(texture, (700, 240))
+    with pytest.raises(RuntimeError, match='absent or ambiguous'):
+        find_contact_album_entry(image, label)

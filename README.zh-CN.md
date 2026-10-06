@@ -28,12 +28,12 @@ WeChat Auto 是面向 **Windows 微信 4.x / Weixin** 的本地自动化与聊�
 **联系人与朋友圈两路采集：** 本地缓存刷新，以及身份核验后的逐人相册加载队列。
 删除、拉黑/黑名单、恢复和朋友圈权限按方向保留证据历史，Memory schema 1/2
 增量迁移到 3。采集受客户端可见范围和已实现控件限制，两路都不保证服务器完整历史。
-命令、MCP、断点恢复与限制见[联系人两路采集](docs/CONTACT_COLLECTION.md)。
+命令、MCP、断点恢复与限制见[朋友圈 Skill 采集规则](skills/wechat-profile-moments/references/CONTACT_COLLECTION.md)。
 
 **窗口导航与失败恢复：** 同进程 HWND 盘点、分层页面识别、当前帧 OpenCV/OCR
 定位、逐步后置验证。只在个人“联系人”分组下找人，排除“新的朋友”和全局混合搜索。
 侧栏定位失败先重算，再交给 Agent 看当前图片，由 BasicSkill 校验后执行。
-详见[窗口导航规则](docs/WINDOW_NAVIGATION.md)。
+详见[导航 Skill 窗口规则](skills/wechat-ui-navigation/references/WINDOW_NAVIGATION.md)。
 
 资料补采在身份核验后保存明确可见的签名、地区、来源等字段，缺失不覆盖旧值。
 缓存媒体归档和单项确认下载提供格式校验与 BLOB 保存，不保证远程完整历史。
@@ -176,7 +176,7 @@ python -m wechat_auto.mcp_server `
 
 | Skill | 用途 |
 |---|---|
-| [base_op](skills/base_op/SKILL.md) | 共用操作规则与唯一 UI 动作入口 |
+| [base-op](skills/base-op/SKILL.md) | 共用操作规则与唯一 UI 动作入口 |
 | [wechat-sync](skills/wechat-sync/SKILL.md) | 归档规范化、增量同步 |
 | [wechat-monthly-analysis](skills/wechat-monthly-analysis/SKILL.md) | 每个会话逐月分析 |
 | [wechat-conversation-summary](skills/wechat-conversation-summary/SKILL.md) | 跨月会话完整 Memory |
