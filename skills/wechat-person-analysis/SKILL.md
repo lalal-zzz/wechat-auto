@@ -1,56 +1,66 @@
 ---
 name: wechat-person-analysis
-description: Build a source-traceable person memory across private chats, groups, profiles, and Moments while preserving scenario differences and corrections.
+description: 依据已审核的会话、资料和朋友圈证据，分析人物事实、兴趣喜恶、场景化行为特征、价值观、情绪与长期变化。
 ---
 
-# Person Analysis
+# 人物分析
 
-Analyze one stable `person_id`; treat `self` as a first-class person.
+一次分析一个稳定的 `person_id`；`self` 与联系人同为一等分析对象。执行前阅读 [MEMORY_STORAGE_CONTRACT.md](references/MEMORY_STORAGE_CONTRACT.md)、[ANALYSIS_QUALITY_STANDARD.md](references/ANALYSIS_QUALITY_STANDARD.md) 和 [EVENT_ANALYSIS_STANDARD.md](references/EVENT_ANALYSIS_STANDARD.md)。人物正文写入 `data/memory/people/{person_id}/current.md`，候选和阅读进度留在 `data/work/analysis/{run_id}/`；显式配置存储路径时更新 `data/analysis_sources.json`。历史版本由提交接口维护。
 
-## Procedure
+## 上游证据
 
-1. Claim the person job and call `analysis.get_person_input`.
-2. Separate private-chat, work-group, friend-group, family-group, and Moments behavior.
-3. Apply precedence: user correction, user description, repeated behavior, short-term behavior, model inference.
-4. Write a complete view containing profile, traits, scenarios, communication, boundaries, relationships, important matters, changes, timeline, and conflicts.
-5. Store short claims/evidence links in SQLite and submit the full view with its parent version.
+1. 使用稳定身份发现获准分析的私聊和共同群聊，包含历史群成员有效期。`analysis.get_person_input` 只返回已关联会话，空结果不证明没有共同群；检查可用归档/群成员来源和受支持的实体工具，再使用已核实关联。不得编造成员发现或关联接口。
+2. 每个纳入的私聊/群聊都使用成功的“月度→会话”结果。缺失的群分析按请求范围交给对应 Skill；不可用来源须说明，其他已成功来源可继续处理，但不能宣称覆盖完整。
+3. 通过 wechat-profile-moments 和真实来源/证据工具取得资料快照与朋友圈内容。人物输入 API 不会自动提供所有资料和朋友圈正文。
+4. 对每个群分别记录目标本人发言、行为、角色、与本人及他人的互动、有效时间和反例。核对 `username/wxid`、群昵称和成员有效期；身份未解决时不得跨场景合并结论。
+5. 他人对目标的评价须保留评价者和语境，不能当作目标本人的直接行为。多次转发同一事件不算独立证据；沉默不构成人格证据。
+6. 分开比较私聊、工作群、朋友群、家人场景，不平均掉差异。只有真正跨场景支持的证据才形成较宽泛的模式。群证据变化只影响相关人物，不自动重跑全体成员。
 
-## Failure handling
+## 分析流程
 
-- Ambiguous identity: stop aggregation and create/use a merge candidate.
-- Sparse evidence: use `unknown` or scoped observations.
-- User correction: supersede the inference while preserving history.
-- Missing scope: disclose the coverage gap and avoid confidence inflation.
+性格、行为与变化的归纳须执行质量标准的“主题归纳与全历史变化的写作验收”。先建立最早相关证据的基线，再比较中期和后期同类表现；稳定特点需要跨时间的独立重复行为。一次小事或极端事件均不自动证明性格，处境反应、自述、承诺和持续改变分别记录。每个主题回答用户实际关心的问题，以事实与代表性例子说明，不从中间的突出事件泛化全历史。
 
-## Version rules
+1. 领取人物任务并调用 `analysis.get_person_input`。检查所纳入会话是否已按分析质量标准完成细读，不能只检查文件存在；稀疏事件摘要须退回月度/重建流程补证据。资料与朋友圈按授权独立收集。
+2. 区分私聊、工作群、朋友群、家庭群和朋友圈证据。私聊里转述的工作表现是自述，不是工作群直接观察。分别分析 self；证据不足的场景标 unavailable。
+3. 按优先级处理信息：用户明确修正 > 用户主动描述 > 长期重复行为 > 短期行为 > 模型推断。事实、日期、喜恶要给出具体支持；性格结论须区分自述、观察和推断，并提供独立场景与反例。
+4. 写完整 Markdown，至少覆盖具体事实/日期、兴趣喜恶和礼物/生活偏好、行为特点、情绪触发与恢复、价值观/决策、场景和沟通、边界/关系、重要事项、带日期的变化、冲突与缺失维度。喜好不能缩成宽泛标签，人格不能缩成几次冲突或依恋词。
+5. 每个模式说明场景、表现、时间范围、例子、例外和置信依据。描述“过去表现→变化点→后续持续/反转”。同一争执中重复的句子不算独立支持。偏好须保留至出现相反证据；不能让近期事件摘要覆盖长期证据。
+6. 检查会话里的约定表达及实际澄清/回应。详细词义留在原会话，人物层仅汇总有证据支持的幽默、解释、边界表达和误解修复模式。昵称、暗号、角色扮演不能单独证明全局性格或真实关系事件。
+7. 资料、动态和会话相互矛盾时分别注明来源，不以单一来源等级或旧 unknown 默认覆盖。日期按相关场景核实历法类型；恋爱纪念日只在适用关系中检查。
+8. 通过标准复核后，将短类型化 Claim 和证据链接存入 SQLite，并提交完整人物 Markdown 与正确父版本。只有提交成功才完成任务和向下游交接。
 
-Track conversation versions, profile/Moments coverage, and user corrections in the input handoff. The current submission backend computes its fingerprint from evidence IDs, template and supported corrections; do not claim it automatically verifies every upstream version or source watermark. A nickname-only change updates profile history without forcing a personality change. Never diagnose illness or state MBTI as fact.
+## 失败处理
 
-## Shared UI and recipient contract
+- 身份不明：停止聚合，建立或使用合并候选。
+- 证据稀疏：标为 unknown 或场景限定的观察。
+- 用户修正：保留历史并覆盖相冲突的模型推断。
+- 来源或场景缺失：明确缺口，不能抬高置信度。
+- 只有事件标题、未审核历史或未检查维度：不得称画像全面；补读，或保留明确标注为不完整的候选。
+- 旧结论疑似错误：回查原始证据和反证，使用受支持的工具更正/失效；旧画像不能证明自己正确。
+- 共同群未分析：标出具体缺口并安排相关范围分析，不能把私聊习惯说成全局习惯。
+- 场景表现不同：保留并列观察，先检查时间、角色和受众变化，再判断是否属于矛盾或性格变化。
+- 不诊断心理疾病，不把 MBTI 或其他人格模型写成事实。
 
-Before UI navigation, recipient selection, removal auditing, or reply dispatch, read
-[UI_WORKFLOW_RULES.md](../../docs/UI_WORKFLOW_RULES.md). Use its search-state table,
-stable-identity checks, missing/removal distinctions, and failure stop conditions.
-Read [UI_PAGE_CATALOG.md](../../docs/UI_PAGE_CATALOG.md) for page descriptions and
-[ACTION_VERIFICATION_MATRIX.md](../../docs/ACTION_VERIFICATION_MATRIX.md) for verification requirements.
-These references must accompany the repository skill; missing references stop UI work.
-Offline-only analysis does not require screenshots or UI actions. Static rules never
-certify a live recipient; the complete stable-identity send workflow remains WA-005.
+## 数据联动与交接
 
-## 数据更新与 Skill 联动
+执行前阅读[数据新鲜度与联动规则](references/SKILL_DATA_WORKFLOW.md)。联动由当前 Agent 按需读取相关 Skill 并执行，不会自动派生子代理、用户聊天或定时任务。只有用户明确要求多 Agent 分析时，才执行质量标准规定的动态分片、独立月份阅读和主体/关系复核。
 
-执行前读取共用的
-[数据新鲜度与联动规则](../../docs/SKILL_DATA_WORKFLOW.md)，先确定历史快照、当前
-状态、回复或 UI 模式。联动由当前 Agent 读取相关 SKILL.md 并执行其工具流程，
-不是自动派生代理、创建定时任务或扩大授权。
+当前画像先联动 wechat-sync 核对相关会话、资料和朋友圈来源覆盖。需要补采时联动 wechat-profile-moments；身份有歧义时联动 wechat-identity-audit。受影响会话先完成 wechat-conversation-summary。`analysis.get_person_input` 不是完整资料/朋友圈正文接口；用现有 evidence 工具展开已有关联。取不到来源就如实标缺口。
 
-当前画像先联动 [wechat-sync](../wechat-sync/SKILL.md)，核对相关会话、资料与
-朋友圈来源覆盖。需补采资料/相册时联动
-[wechat-profile-moments](../wechat-profile-moments/SKILL.md)；身份问题先联动
-[wechat-identity-audit](../wechat-identity-audit/SKILL.md)。
-受影响会话先完成 [wechat-conversation-summary](../wechat-conversation-summary/SKILL.md)。
-analysis.get_person_input 不是完整资料/朋友圈原文接口，需要时用 evidence 工具
-展开已有引用；拿不到来源就标缺口，不假装这些输入已自动提供。
-按各私聊/群聊场景及 self 分别分析，交接人物版本、来源覆盖与未解决冲突给
-[wechat-timeline](../wechat-timeline/SKILL.md) 和 [wechat-dashboard](../wechat-dashboard/SKILL.md)。
-回复只需相关短 Claim，不将全人物档案交给每次草稿。
+按私聊、群聊和 self 分别分析，向 wechat-timeline 和 wechat-dashboard 交接成功人物正文、来源覆盖与未解决冲突。回复只取所需短 Claim，不把整份人物档案放进每次草稿。
+
+## 分片、复核与交付
+
+完整授权多 Agent 阅读和全面交付时，依照[分析质量标准](references/ANALYSIS_QUALITY_STANDARD.md)中的分片和主体复核要求，使用[共享分片交接格式](references/monthly-handoff.md)。按真实跨度、记录数和可读字符量安排阅读；每月独立产出、独立复核，由协调者串行提交。规划不证明实际阅读，也不代表已获多 Agent 授权。
+
+逐条区分 `speaker`、`actor`、`fact_owner`、`relation_owner` 和提及/引用第三方，保留 self 和联系人各自的社会关系；第三方事实、偏好或安排不得归给讲述人。上游为固定范围的成功月度/会话正文和资料证据；下游为人物/关系正文、时间线及详细 HTML。覆盖不全、归属不明、缺独立复核或上游未成功时，停止可信汇总并保留上一成功版。
+
+## 语音证据与人物归纳
+
+语音经本地转写及月度上下文审核后，与文本证据同样用于双方人物分析。沿原消息核对作者、实际行动者和第三方所属关系，保留场景与反例；不能把 ASR 的文字选择当成本人精确措辞，也不凭文字推断声学情绪。语音补入改变旧归纳时保留修订版本，依照本目录分析质量标准更新。
+
+## 随包资源范围
+
+执行规则、参考文档与模板只读取本 Skill 目录中的 `references/`、`assets/` 和已提供的 `scripts/`，相对路径从本 Skill 目录解析。不能跨目录借用另一个 Skill 的参考资源；缺少必需随包资源时报告缺失，维护时补齐本目录副本。其他 Skill 名称仅表示流程职责与上下游，不代替本目录资源。项目运行接口、正式数据路径与项目命令是运行依赖，不是外部指令来源；不为打包复制私人数据。
+
+全历史综合时读取本目录的[全历史综合要求](references/full-history-synthesis.md)，并执行本目录质量标准中的主题归纳、性格时间链与四类主题详细总结验收。

@@ -74,6 +74,31 @@ class ScreenshotHelper:
             if source_dc:
                 win32gui.ReleaseDC(int(hwnd), source_dc)
 
+    def capture_visible_window(self, hwnd: int) -> Image.Image | None:
+        """Read the visible foreground frame; reject background/changed windows.
+
+        This composite includes owned popups. It is suitable for checking the
+        visible search field, not for treating overlays as main-window content.
+        """
+        if not self._enabled or not hwnd:
+            return None
+        import win32gui
+        from PIL import ImageGrab
+
+        try:
+            foreground = win32gui.GetForegroundWindow()
+            if (not win32gui.IsWindowVisible(hwnd) or win32gui.IsIconic(hwnd)
+                    or win32gui.GetAncestor(foreground, 3) != hwnd):
+                return None
+            rect = win32gui.GetWindowRect(hwnd)
+            image = ImageGrab.grab(bbox=rect, all_screens=True)
+            if (win32gui.GetWindowRect(hwnd) != rect
+                    or win32gui.GetForegroundWindow() != foreground):
+                return None
+            return image
+        except Exception:
+            return None
+
     def save(self, image: Image.Image | None, skill: str, tag: str) -> str | None:
         """Persist a captured image as ``<skill>_<timestamp>_<tag>.png``.
 

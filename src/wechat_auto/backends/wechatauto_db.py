@@ -126,7 +126,7 @@ class DatabaseConversationBackend:
                 "new_message_count": len(poll["messages"])}
 
     def sync_when_notified(self, username: str, database_path: str, *, source: str = "wechat_db",
-                            limit: int = 200) -> dict:
+                            limit: int = 200, voice_model_path=None, voice_device: str = "auto") -> dict:
         """Read one DB delta into our offline SQLite only after an external event.
 
         Pair this with :class:`WindowsDirectoryWatcher`; no background polling
@@ -134,7 +134,7 @@ class DatabaseConversationBackend:
         notification with no new message is a cheap no-op.
         """
         from wechat_auto.storage import HistoryStore
-        with HistoryStore(database_path) as store:
+        with HistoryStore(database_path, voice_model_path=voice_model_path, voice_device=voice_device) as store:
             since = store.get_cursor(source, username)
             update = self.poll(username, since, limit=limit)
             from wechat_auto.storage import make_message_id
@@ -153,9 +153,10 @@ class DatabaseConversationBackend:
                     "media": self._message_media(item),
                 })
             added = store.save_messages(records)
+            voice_processing = store.last_voice_processing
             store.set_cursor(source, username, update["watermark"])
         return {"rows_added": added, "watermark": update["watermark"],
-                "new_inbound": len(update["messages"])}
+                "new_inbound": len(update["messages"]), "voice_processing": voice_processing}
 
     def initial_import(self, username: str, database_path: str, *, batch_size: int = 200,
                        max_messages: int = 10_000, source: str = "wechat_db") -> dict:
@@ -202,7 +203,7 @@ class DatabaseConversationBackend:
 
     def archive_all_history(self, database_path: str, *, batch_size: int = 500,
                             source: str = "wechat_db",
-                            include_images: bool = True,
+                            include_images: bool = True, voice_model_path=None, voice_device: str = "auto",
                             progress: Callable[[int, int, str], Any] | None = None) -> dict:
         """Persist every message in every local chat, including local media.
 
@@ -228,7 +229,7 @@ class DatabaseConversationBackend:
             exported.row_factory = sqlite3.Row
             chats = [dict(row) for row in exported.execute(
                 "SELECT username,name,message_count FROM chats ORDER BY rowid")]
-            with HistoryStore(database_path) as store:
+            with HistoryStore(database_path, voice_model_path=voice_model_path, voice_device=voice_device) as store:
                 for chat_index, chat_info in enumerate(chats):
                     username = str(chat_info.get("username", ""))
                     if not username:

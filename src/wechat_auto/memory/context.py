@@ -134,6 +134,11 @@ class ContextBuilder:
             rows = db.execute("SELECT id,sender,content,message_time,direction FROM messages WHERE " +
                               where + " ORDER BY rowid LIMIT ?", (*args, limit)).fetchall()
         messages = [dict(zip(("id", "sender", "content", "time", "direction"), row)) for row in rows]
+        with sqlite3.connect(self.history_path.as_uri()+"?mode=ro",uri=True) as db:
+            if db.execute("SELECT 1 FROM sqlite_master WHERE name='voice_transcriptions' AND type='table'").fetchone():
+                for item in messages:
+                    tr = db.execute("SELECT text,engine,status FROM voice_transcriptions WHERE message_id=? ORDER BY version DESC LIMIT 1",(item["id"],)).fetchone()
+                    if tr:item["transcription"]=dict(zip(("text","engine","status"),tr))
         info.update(status="partial" if total > len(rows) else "archive_range_loaded",
                     count=len(rows), remaining_count=total-len(rows),
                     next_after_id=messages[-1]["id"] if total > len(rows) else "")
@@ -149,7 +154,7 @@ class ContextBuilder:
         pending, coverage = self._pending_messages(conversation_id, formal, pending_limit, pending_after_id)
         memory = self.compact_claims(person_id=person_id, conversation_id=conversation_id, limit=claim_limit)
         def render(items):
-            return "\n".join(f"- {i.get('time', '')} {i.get('sender', '')} [{i.get('id', '')}]: {i.get('content', '')}" for i in items) or "（无）"
+            return "\n".join(f"- {i.get('time', '')} {i.get('sender', '')} [{i.get('id', '')}]: {i.get('content', '')} {i.get('transcription', {}).get('text', '')}" for i in items) or "（无）"
         text = "当前消息（优先依据）：\n\n" + render(messages)
         text += "\n\n分析覆盖边界起的原始消息（含末日重读，尚未归纳为分析结论）：\n\n" + render(pending)
         text += "\n\n已完成的正式分析（历史背景）：\n\n" + ("\n\n".join(

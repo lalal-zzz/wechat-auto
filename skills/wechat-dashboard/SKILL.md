@@ -1,53 +1,83 @@
 ---
 name: wechat-dashboard
-description: Generate and verify offline HTML, PNG, and Mermaid memory dashboards from structured claims and events without exposing raw evidence.
+description: 从已审核的正式 Markdown 生成离线详细 HTML 报告，或根据结构化 Claim 与 Event 生成 HTML、PNG 和 Mermaid 记忆仪表盘。
 ---
 
-# WeChat Dashboard
+# 微信记忆仪表盘
 
-## Procedure
+此 Skill 只展示已分析结果，不执行来源同步或新分析。执行前阅读 [MEMORY_STORAGE_CONTRACT.md](references/MEMORY_STORAGE_CONTRACT.md)、[ANALYSIS_QUALITY_STANDARD.md](references/ANALYSIS_QUALITY_STANDARD.md) 和 [EVENT_ANALYSIS_STANDARD.md](references/EVENT_ANALYSIS_STANDARD.md)。仪表盘必须如实显示来源范围、覆盖、缺口和当前状态；渲染成功不等于分析完整或数据最新。
 
-1. Check `status.summary`; finish relevant successful analysis jobs before refresh.
-2. Call `charts.refresh` with the requested person/conversation scope.
-3. Verify the HTML, PNG, and Mermaid artifacts exist and contain the selected scope and current version.
-4. Keep charts based on SQLite structure; do not parse Markdown as the machine data source.
-5. Expand evidence only after the user selects a claim/event and asks why.
+## 图表要求
 
-## Failure handling
+事件图展示已审核阶段、实际日期、状态、不确定区间和指向会话正文/证据的链接。不可观测区间不能用连续曲线暗示有活动；区分重复事件及计划/实际里程碑。刷新图表不能补做缺失事件分析或伪造历史阶段。
 
-- No claims/events: generate an honest structural/empty state rather than fabricated trends.
-- Missing graph renderer: retain HTML and Mermaid output and report PNG unavailable.
-- Stale dirty nodes: label the dashboard stale and queue analysis before treating it as current.
-- Corrupt output: write to a temporary artifact and keep the prior valid dashboard.
+分析图展示有证据的具体日期和偏好/行为变化锚点，不能只画事件数量。会话图展示事项、话题、任务、角色及本场景互动变化；人物图聚合获准场景、资料和朋友圈中的特征/偏好变化。群证据标注场景；消息量、群体沉默不能转换为全局人格分数。
 
-## Version rules
+详细报告可以用同源 `activity` SVG 展示各月消息数量：`value` 必须是非负整数，并在同源正文中说明时间范围和计数。消息量不是情绪、人格或关系质量指标，不能单独证明关系变化。图表与完整月度/综合正文一起交付。
 
-Dashboard metadata must contain generator/application version and source analysis versions. Refreshing unchanged inputs may replace generated views but must not create Memory versions. All assets remain local and self-contained.
+## 结构化仪表盘流程
 
-## Shared UI and recipient contract
+1. 调用 `status.summary`，确认相关分析任务已经成功。
+2. 按请求的人物/会话范围调用 `charts.refresh`。
+3. 检查生成的 HTML、PNG 和 Mermaid 文件确实存在，且范围和当前成功分析输出对应。
+4. 图表机器数据只用 SQLite 结构化结果；不得把 Markdown 当机器数据源解析。
+5. 用户选中某条 Claim/Event 并询问依据后，再按需展开证据。
 
-Before UI navigation, recipient selection, removal auditing, or reply dispatch, read
-[UI_WORKFLOW_RULES.md](../../docs/UI_WORKFLOW_RULES.md). Use its search-state table,
-stable-identity checks, missing/removal distinctions, and failure stop conditions.
-Read [UI_PAGE_CATALOG.md](../../docs/UI_PAGE_CATALOG.md) for page descriptions and
-[ACTION_VERIFICATION_MATRIX.md](../../docs/ACTION_VERIFICATION_MATRIX.md) for verification requirements.
-These references must accompany the repository skill; missing references stop UI work.
-Offline-only analysis does not require screenshots or UI actions. Static rules never
-certify a live recipient; the complete stable-identity send workflow remains WA-005.
+没有 Claim/Event 时生成诚实的空状态，不编造趋势。图形渲染器不可用时保留 HTML/Mermaid 并说明 PNG 不可用。存在未处理 dirty 节点时标示待更新并先交还分析流程；输出损坏时先写临时文件，保留原有有效页面。
 
-## 数据更新与 Skill 联动
+刷新不变输入可以替换派生页面，但不能创建新的 Memory 正文。仪表盘元数据应记录生成器/应用信息和实际使用的成功分析正文来源，所有资源本地化，不联网依赖。
 
-执行前读取共用的
-[数据新鲜度与联动规则](../../docs/SKILL_DATA_WORKFLOW.md)，先确定历史快照、当前
-状态、回复或 UI 模式。联动由当前 Agent 读取相关 SKILL.md 并执行其工具流程，
-不是自动派生代理、创建定时任务或扩大授权。
+## 本地页面与资源
 
-先区分查看既有版本与刷新当前状态。前者读取指定版本，后者按受影响范围联动
-[wechat-sync](../wechat-sync/SKILL.md)、
-[wechat-conversation-summary](../wechat-conversation-summary/SKILL.md)、
-[wechat-person-analysis](../wechat-person-analysis/SKILL.md) 和
-[wechat-timeline](../wechat-timeline/SKILL.md)。无关节点不等待也不刷新。
-charts.refresh 只渲染已有 Claim/Event，不执行同步和分析。交接成功结构化版本、
-范围及缺口；只在相关上游已提交后把产物称为当前仪表盘。
-无法证明依赖就绪时，保留旧图并在对用户的说明中标注截至范围/未知新鲜度，
-不要声称渲染器已自动写入完整 stale 状态。渲染不触发回复、UI 导航或媒体下载。
+通用页面使用 `assets/dashboard.html`、`assets/dashboard.css` 和 `assets/dashboard.js`，由 `DashboardBuilder` 内嵌到结果。页面不依赖网络、外部字体或静态服务器。静态资源中不能包含私人身份、聊天或分析正文。
+
+全历史详细报告使用无私人数据的 `assets/report-template.html` 作为 HTML 外壳，配合 `assets/report.css` 与 `assets/report.js` 生成离线页面。模板只保留通用文案和占位符；联系人/会话名称、覆盖日期、分析正文和导航均由本次已核验输入在运行时注入。不得把生成的私人报告或截图复制回模板目录。
+
+
+可直接打开 [无私人数据的完整界面参考](assets/report-reference.html)，查看 11 个主题的折叠预览、分段/连续阅读、主题图解对照、月份跳转、图表切换和手机布局。该页面使用通用人物占位、演示日期与虚构数量，仅作为界面参考，不是分析输入或真实结论。维护时与本目录 HTML 外壳、CSS 和 JS 同步；不得用私人报告替换参考页面。
+
+私人生成页面写入配置的 `data/memory/dashboard/`，人物页在 `people/{person_id}/`，会话页在 `conversations/{conversation_id}/`；同时筛选时在人物目录下再限定会话。HTML、PNG、Mermaid 按同一对象范围存放，避免互相覆盖。
+
+页面使用中文，支持关键词/依据筛选、内容维度分组、具体事件阶段、来源状态和手机布局。技术标识、水位、置信记录和分析来源详情可折叠；日期默认显示北京时间并保留证据中的精度。页面只读正式 SQLite 记录，不读取工作区候选。详细 Markdown 链接只允许指向 `memory_root` 内路径及校验值均与数据库当前成功记录匹配的文件；文件缺失或核验失败时不提供链接。
+
+页面元数据记录生成器信息、生成时间、当前成功分析正文来源和展示上限。当前渲染器不验收语义完整性或来源实时性。存在 dirty 记录时提示待更新；即使没有 dirty 记录，新鲜度仍可能为 unknown。分别说明来源覆盖、语义阅读和媒体解释情况。每类内容达到 500 条展示上限时，提示搜索仅限当前已展示内容。
+
+## 全历史详细报告
+
+用户明确要求全历史最终报告时，必须先有所有来源月份的成功阅读与独立复核，由主模型完成全量综合后再交付。阶段页面和进度页不能代替最终报告。
+
+图文展示清单可通过 `--visuals <work/visuals.json>` 传入报告命令。`source_versions` 必须绑定真实正式范围/正文来源/内容 hash；所有节点、关系和时间项须能在同源成功正文中定位到原句并通过语义复核，不能只查字符串是否存在。
+
+用户要求详细全面分析时，按分析质量标准的双视图验收执行：
+
+```powershell
+python scripts/build_analysis_report.py --conversation-id <id> --accepted-receipts <work/accepted_versions.json>
+```
+
+协调者确认成功回执的精确白名单。详细报告渲染正式完整 Markdown，不限 500 条；不读取候选，也不新增分析结论。`charts.refresh` 只生成短 Claim/Event 仪表盘，不能替代全量报告。HTML 的导航和排版可增强，但事实、偏好、双方关系、事件过程和变化都须来自同一成功正文。渲染成功不代表语义验收。上游失败、白名单/正式路径/hash 不匹配时保留旧产物并报告缺口。
+
+## 有证据的图文展示
+
+综合正文的折叠主题也须提供阅读层次：折叠预览只能摘取现有正文，展开后按完整句子分段保留原文，支持分段/连续阅读。可把同源全历史图解作为可展开对照嵌入相关主题，清楚注明其全历史范围，不能冒充该主题独立图表。引用月份提供月报跳转，不将引用月份绘成行为持续期或性格变化曲线。排版增强不代替主题归纳修订，不能以自动断句新增标题结论或删掉反例。
+
+参考界面使用本目录 `assets/report-template.html`、`report.css` 和 `report.js`。当前模板支持可切换图表、按年份筛选的月份时间带、柱形点击/键盘打开月报、时间节点详情、阅读进度和减少动态效果设置。日期范围按已有证据绘图，明确日期用点、明确起止范围用条、仅月份用日期窗口；月份窗口不能解释为事件持续整月。时间与数量图不能补造分析结论。模板保留占位符和通用界面，不写入当前报告的私人正文；生成页面在正式数据目录注入同源成功内容。
+
+详细 HTML 将信息图与完整正文并列呈现，包括分开显示实际日期/计划日期的事件时间线、self/contact 各自社会关系图、具体喜好差异和沟通/情绪/行为的场景变化。每个节点、关系或时间项都要对应成功 Markdown 中已有的结论和证据；显示 `observed`、`inferred`、`unknown` 状态、来源范围和日期精度。没有明确变化不画曲线，不给人格、感情或关系强度打分。第三方节点保留关系所属者和 scoped reference，不能按同名/称谓合并。
+
+可使用本地 `visuals.json` 作为派生展示清单，记录标题、图类型、节点/边/时间项、来源 Markdown 小节、evidence ID、`ordinal_base`、来源和正文 hash。它只是渲染提示，不是新的分析正文或 Memory。只有正式成功正文回执核验通过后才可展示；不从候选或未审核历史扩充图。
+
+只有用户授权后才能使用现有本地图片/媒体，且须核实来源和内容；不下载媒体，不猜测头像归属。没有可靠媒体时提供信息图和详细正文，不缩成短 Claim 列表。图表用于导航和解释，不能替代正文细节。
+
+## 数据联动与停止条件
+
+执行前阅读[数据新鲜度与联动规则](references/SKILL_DATA_WORKFLOW.md)。先区分查看指定成功正文与刷新当前结果。刷新当前结果时，仅按实际依赖联动 wechat-sync、wechat-conversation-summary、wechat-person-analysis 和 wechat-timeline 中必要节点。`charts.refresh` 不执行同步或分析。
+
+交接成功结构化数据、正文范围和缺口。只有相关上游成功后才把产物称为当前仪表盘。无法证明依赖就绪时，保留旧图并说明其截至范围或新鲜度 unknown；不能声称渲染器自动检查所有依赖。渲染不触发回复、UI 导航或媒体下载。
+
+## 语音覆盖展示
+
+报告使用已纳入转写并成功提交的正式正文，显示原音频归档、转写、语义阅读与剩余缺口。语音文字补入后先更新分析，再生成 HTML；不能用新转写文件直接扩写旧成功正文。播放/回听入口只指向已核验的本地来源，不联网下载，不把语音消息总数显示成已分析数量。
+
+## 随包资源范围
+
+执行规则、参考文档与模板只读取本 Skill 目录中的 `references/`、`assets/` 和已提供的 `scripts/`，相对路径从本 Skill 目录解析。不能跨目录借用另一个 Skill 的参考资源；缺少必需随包资源时报告缺失，维护时补齐本目录副本。其他 Skill 名称仅表示流程职责与上下游，不代替本目录资源。项目运行接口、正式数据路径与项目命令是运行依赖，不是外部指令来源；不为打包复制私人数据。

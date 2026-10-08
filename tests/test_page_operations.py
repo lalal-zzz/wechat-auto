@@ -100,12 +100,12 @@ def test_search_clears_existing_query_and_ignores_microphone_ocr(mock_app, confi
     field = {'x': 10, 'y': 10, 'w': 100, 'h': 30}
     def text_box(text, x=20, w=50):
         return {'text': text, 'x': x, 'y': 15, 'w': w, 'h': 15, 'score': .99}
-    skill.vision.recognize_image.return_value = [text_box('旧关键词')]
-    skill.vision.ocr.side_effect = [
+    skill.vision.recognize_image.side_effect = [[text_box('旧关键词')],
         [text_box('搜索'), text_box('O', x=100, w=5)], [text_box('新关键词')]]
     with patch('wechat_auto.primitives.page_geometry.observe_geometry', return_value={'search_field_candidates': [field]}), \
          patch('wechat_auto.primitives.page_controls.find_search_clear', return_value=[(95, 25)]), \
-         patch('wechat_auto.actions.basic.time.sleep'):
+         patch('wechat_auto.actions.basic.time.sleep'), \
+         patch('wechat_auto.utils.screenshot.ScreenshotHelper.capture_visible_window', return_value=Image.new('RGB',(200,100))):
         assert skill.prepare_search('新关键词')['selection_required'] is True
     assert skill.vision.recognize_image.call_args.args[0].size == (75, 30)
     assert skill.vision.recognize_image.call_args.kwargs['region'] == (23, 10, 75, 30)
@@ -122,9 +122,32 @@ def test_search_geometry_failure_never_types(mock_app, config, session):
     skill._vision_auto = MagicMock()
     skill._keyboard_only_auto = MagicMock()
     skill.vision.capture.return_value = Image.new('RGB', (200, 100))
-    with patch('wechat_auto.primitives.page_geometry.observe_geometry', return_value={'search_field_candidates': []}), \
+    with patch('wechat_auto.utils.screenshot.ScreenshotHelper.capture_visible_window', return_value=Image.new('RGB',(200,100))), \
+         patch('wechat_auto.primitives.page_geometry.observe_geometry', return_value={'search_field_candidates': []}), \
          pytest.raises(RuntimeError, match='absent or ambiguous'):
         skill.prepare_search('关键词')
+    skill.keyboard_only._type_text.assert_not_called()
+
+
+def test_search_reset_rejects_unknown_or_foreign_auxiliary_without_keys(mock_app, config, session):
+    skill = BasicSkill(mock_app, config, session)
+    skill._keyboard_only_auto = MagicMock()
+    skill.inspect_windows = MagicMock(return_value=[{'is_main':False,'status':'unknown'}])
+    with pytest.raises(RuntimeError, match='recognized owned search'):
+        skill.reset_search_popup()
+    skill.keyboard_only.press_key.assert_not_called()
+
+
+def test_search_reset_verifies_popup_disappearance_before_new_input(mock_app, config, session):
+    skill = BasicSkill(mock_app, config, session)
+    skill._keyboard_only_auto = MagicMock()
+    popup = {'hwnd':5,'is_main':False,'status':'recognized','owner_hwnd':mock_app.handle,
+             'surfaces':[{'page':'search_suggestions'}]}
+    skill.inspect_windows = MagicMock(return_value=[popup])
+    mock_app.list_windows.return_value = [popup]
+    with patch('wechat_auto.actions.basic.time.sleep'), pytest.raises(RuntimeError, match='did not dismiss'):
+        skill.reset_search_popup()
+    skill.keyboard_only.press_key.assert_called_once_with('escape')
     skill.keyboard_only._type_text.assert_not_called()
 
 

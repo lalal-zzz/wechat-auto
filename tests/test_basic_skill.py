@@ -321,3 +321,26 @@ def test_sticker_id_cannot_use_stored_cell_coordinates(mock_app, mock_finder, co
     with pytest.raises(RuntimeError, match='removed'):
         skill.send_sticker_by_id('target', 'sticker', 'catalog.sqlite3', confirm=True)
     skill.keyboard_only.click_window_fraction.assert_not_called()
+def test_verified_send_requires_confirmation_and_stable_recipient(mock_app, config, session):
+    from wechat_auto.actions.basic import BasicSkill
+    skill = BasicSkill(mock_app, config, session)
+    with pytest.raises(PermissionError, match='explicit confirmation'):
+        skill.send_current_verified_text('test')
+    with pytest.raises(PermissionError, match='recipient lease'):
+        skill.send_current_verified_text('test', confirm=True)
+
+
+def test_search_selection_never_accepts_an_unrelated_builtin(mock_app, config, session):
+    from wechat_auto.actions.basic import BasicSkill
+    skill = BasicSkill(mock_app, config, session)
+    with pytest.raises(ValueError, match='built-in FileHelper'):
+        skill.select_search_result('Other', section='function', username='filehelper')
+    with pytest.raises(ValueError, match='contact/function'):
+        skill.select_search_result('Someone', section='chat_history', username='wxid_test_x')
+
+
+def test_confirmed_sticker_cannot_submit_unbound_raw_coordinates(mock_app,mock_finder,config,session):
+    skill=_skill(mock_app,mock_finder,config,session)
+    with pytest.raises(RuntimeError,match='current-frame asset matching'):
+        skill.send_sticker((.4,.4),confirm=True)
+    skill.keyboard_only.click_window_fraction.assert_not_called()

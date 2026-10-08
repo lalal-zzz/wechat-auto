@@ -1,58 +1,59 @@
 ---
 name: wechat-monthly-analysis
-description: Analyze one conversation month into claims, events, coverage, and a compact full Markdown version with safe incremental recovery.
+description: 按私聊或群聊月份细读事项、话题、任务、参与者、本会话聊天习惯、偏好与变化，为人物分析提供可追溯证据。
 ---
 
-# Monthly Conversation Analysis
+# 月度会话分析
 
-Process one `conversation_id + YYYY-MM` job. A month partitions input; it does not truncate an event.
+每次处理一个 `conversation_id + YYYY-MM`。月份只划分输入范围，不能截断跨月事件。
 
-## Procedure
+## 存储与标准
 
-1. Claim one job with `analysis.claim_job`; do not process a job already running elsewhere.
-2. Read bounded pages with `analysis.get_month_input` until `next_after_id` is empty.
-3. Read the previous current month and version.
-4. Separate confirmed statements, observations, multi-evidence inferences, and unknowns.
-5. Produce a complete Markdown view with overview, events, commitments, relationship and communication changes, and open events.
-6. Submit claims, events, evidence references, actual coverage, template version, and `expected_parent` through `analysis.submit`; the backend computes its input fingerprint.
-7. Complete the job only after SQLite and Markdown writes succeed.
+执行前阅读 [MEMORY_STORAGE_CONTRACT.md](references/MEMORY_STORAGE_CONTRACT.md)、[ANALYSIS_QUALITY_STANDARD.md](references/ANALYSIS_QUALITY_STANDARD.md) 和 [EVENT_ANALYSIS_STANDARD.md](references/EVENT_ANALYSIS_STANDARD.md)。月度正文存入 `data/memory/conversations/{conversation_id}/months/{YYYY-MM}/current.md`；候选和阅读进度仅存于 `data/work/analysis/{run_id}/`。显式配置时核对同一组 `memory_db` / `memory_root`，并更新 `data/analysis_sources.json`。由提交接口维护历史版本，不自行复制或覆盖。
 
-## Failure handling
+这是会话细读流程，适用于朋友、同事、客户、家人和群聊。按证据判断具体场景，场景不明时保留 unknown。聚焦本会话事项、话题和每位参与者在本场景的聊天习惯；人物线索交给人物分析，不在每个月生成全局画像。无需等待完整资料/朋友圈，也不对每段关系套用恋爱模板。
 
-- Parent conflict: discard output, reload current inputs, and recompute.
-- Missing evidence page: retain the prior Memory and leave a resumable failure.
-- Invalid date: preserve unknown precision; never invent a day.
-- Conflicting conclusions: keep both with validity/status.
-- Unchanged fingerprint: accept the no-op and create no version.
+## 执行步骤
 
-## Version rules
+1. 领取一个 `analysis.claim_job` 任务，不处理其他 Agent 正在运行的任务。已确认的待处理任务属于请求的会话和月份时，传入其 `job_id` 精确领取；未找到、运行中或未到可执行状态时停止，不能回退到其他范围。
+2. 调用 `analysis.get_month_input` 读取所有分页，直到 `next_after_id` 为空。大页按时间顺序拆成语义块，完整阅读每段可读文本并跨块续接未结束对话。分别记录已获取文本、实际语义阅读、未读文本和媒体覆盖；读取行数本身不证明读懂。
+3. 检查当前月正文和历史版本、相关早期偏好/行为及未完成事件。用稳定来源身份核对双方发言；发送者不明的内容不能作为个人结论。
+4. 逐项阅读重要事项和话题：起因、参与者、诉求、决定、负责人、期限、执行/变更证据与未解决问题。对相关发言人分别检查场景行为、偏好、情绪、价值观和边界；保留反例、引述者和笑谈的归属。不能只挑少量长消息或 Claim。按共用标准检查约定表达、暗号和玩笑的原词、提出者/接收者、实际理解证据、使用条件、回应、反例和日期变化，放在“约定表达与语境”小节；沉默或笑声不等于同意，语言约定不等于行动承诺。
+5. 核实本场景出现的交付、入职、会议、考试、活动等日期。只在生日或适用的关系纪念场景出现时核对日历类型；输出证据明确的具体日期、对象与含义。计划、期限、实际发生、回顾日期必须分清。
+6. 写一份完整 Markdown：场景概览、事项/话题、任务/决定及状态、明确事实和日期、双方本会话聊天习惯、偏好/行为线索、角色/边界/互动、变化/开放问题、阅读与维度覆盖。提供具体表达和互动例子；群聊还要写群内约定、相关成员角色及其互动。推断保持场景范围，不把每月写成全局画像。
+7. 按共用分析质量标准验收，再调用 `analysis.submit`，提交短 Claim、相关 Event、证据引用、实际覆盖、模板标识和 `expected_parent`。输入指纹由后端计算。
+8. 只有 SQLite 与 Markdown 提交均成功后才完成任务；把成功正文、覆盖、日期结论和缺口交给下游。
 
-Every semantic change creates a full version; delta Markdown is forbidden. Incompatible template changes trigger rebuild. Superseded claims/events remain historical.
+## 失败处理
 
-## Shared UI and recipient contract
+- 父版本冲突：重新读取输入并重算，不提交旧结果。
+- 分页缺失：保留上个完整 Memory，记录可续做失败。
+- 日期精度不足：标记 unknown，不补猜具体日。
+- 缺少结果证据或之后一段沉默：事件保持开放/未知，不在月末自动结案；无连续证据时将相似事件分开。
+- 结论冲突：保留双方来源及有效状态，不静默覆盖。
+- 约定语义不明：读取解释与完整回应链，保留按场景区分的候选；不能用旧玩笑抵消当前拒绝，未解读媒体不能证明含义。
+- 输入无变化：接受无操作结果，不产生重复正文版本。
+- 未读文本、漏项或未核实日期：继续读取/核验；资源不可用时留存本地候选并标缺口，不把任务标为完整。
+- 解析器丢失正文/引述，或媒体可能含关键日期：记录具体缺口，只使用获准的本地来源补查，不作否定推断。
 
-Before UI navigation, recipient selection, removal auditing, or reply dispatch, read
-[UI_WORKFLOW_RULES.md](../../docs/UI_WORKFLOW_RULES.md). Use its search-state table,
-stable-identity checks, missing/removal distinctions, and failure stop conditions.
-Read [UI_PAGE_CATALOG.md](../../docs/UI_PAGE_CATALOG.md) for page descriptions and
-[ACTION_VERIFICATION_MATRIX.md](../../docs/ACTION_VERIFICATION_MATRIX.md) for verification requirements.
-These references must accompany the repository skill; missing references stop UI work.
-Offline-only analysis does not require screenshots or UI actions. Static rules never
-certify a live recipient; the complete stable-identity send workflow remains WA-005.
+## 数据联动与交接
 
-## 数据更新与 Skill 联动
+执行前阅读[数据新鲜度与联动规则](references/SKILL_DATA_WORKFLOW.md)。联动只表示当前 Agent 读取相关 Skill 并运行其流程，不会自动创建子代理、用户聊天或定时任务。只有用户明确要求多 Agent 分析时，才按分析标准的动态分片、独立复核和串行提交要求处理。
 
-执行前读取共用的
-[数据新鲜度与联动规则](../../docs/SKILL_DATA_WORKFLOW.md)，先确定历史快照、当前
-状态、回复或 UI 模式。联动由当前 Agent 读取相关 SKILL.md 并执行其工具流程，
-不是自动派生代理、创建定时任务或扩大授权。
+当前月份或历史补入先联动 wechat-sync，确认该会话月份的原始归档已更新；固定历史快照须说明输入范围和缺口。领取任务后核实会话、月份和任务类型，不越权领取其他范围。读完全部分页后，用实际 `evidence_ids`、覆盖信息、`template_version` 和父版本提交。
 
-当前月份或历史补入任务先联动 [wechat-sync](../wechat-sync/SKILL.md)，
-确认该会话月份的原始归档已更新；纯历史快照分析则固定证据范围，说明缺口。
-领取后核对任务类型、conversation_id 与月份，不处理超出授权范围的下一任务。
-读完所有分页，记录实际覆盖，再向 analysis.submit 提交 evidence_ids、coverage、
-template_version 和 expected_parent；输入指纹由后端计算。
-成功提交并完成该任务后，将月份版本交给
-[wechat-conversation-summary](../wechat-conversation-summary/SKILL.md)；长期事件需要
-连续性处理时联动 [wechat-timeline](../wechat-timeline/SKILL.md)。
-新增旧消息更新其所属历史月份，不使无关月份重跑；未读完或父版本冲突不交接成功。
+成功完成后向 wechat-conversation-summary 交接月份结果；需要事件连续性时联动 wechat-timeline。交接事项/话题、参与者稳定身份、各自本会话表达和行为证据及成功输出。群聊核对成员稳定 ID、群昵称历史与成员有效期，不把群级事件归给所有人。旧消息只更新所属月份；未读完、主体未核验或父版本冲突时不能作为成功上游。
+
+## 分片、复核与交付
+
+完整授权多 Agent 阅读和全面交付时，按[分析质量标准](references/ANALYSIS_QUALITY_STANDARD.md)中规定的分片与主体复核要求执行，并使用[共享分片交接格式](references/monthly-handoff.md)。根据真实消息跨度、条数和可读字符量安排分片；每月仍独立产出并复核，协调者串行提交。规划器不证明实际阅读，也不授权自动启动代理。
+
+核对 `speaker`、`actor`、`fact_owner`、`relation_owner` 和提及/引述的第三方；保留 self 与联系人各自社会关系，不能把第三方事实、偏好或安排归给讲述人。上游是固定证据范围与成功复核正文；下游为会话、人物/关系、时间线和详细报告。覆盖不全、主体不明、缺独立复核或上游失败时停止可信交接，保留上一成功正文和本地候选。
+
+## 语音内容的逐条阅读
+
+分析前确认归档阶段已处理本月语音：每条原消息的音频与 transcription 同源关联。读取全部月度分页时把转写文字作为该条消息内容阅读，保留发言方向和前后回合；关键姓名、数字、日期、否定和承诺有疑点时回听片段。缺音频/未转写/未核验的范围单独交接，不以媒体 XML 代替正文。新增转写先重算受影响月报，成功后再交给综合；具体规则见本目录分析质量标准。
+
+## 随包资源范围
+
+执行规则、参考文档与模板只读取本 Skill 目录中的 `references/`、`assets/` 和已提供的 `scripts/`，相对路径从本 Skill 目录解析。不能跨目录借用另一个 Skill 的参考资源；缺少必需随包资源时报告缺失，维护时补齐本目录副本。其他 Skill 名称仅表示流程职责与上下游，不代替本目录资源。项目运行接口、正式数据路径与项目命令是运行依赖，不是外部指令来源；不为打包复制私人数据。

@@ -70,3 +70,9 @@ claims 表的 conversation_expression 类型及证据关联保存；不另建任
 
 本文是 Skill 存储契约；当前任意参数 create_server/CLI 不会自动强制这些位置，
 执行 Agent 须核验。运行时路径绑定及语义阅读进度门禁仍需单独实现与验收。
+
+## 语音原件与转写的同源保存
+
+原语音保存在所选消息归档库 message_media 的 BLOB 中，转写保存在同库 voice_transcriptions。两者通过原消息稳定 message_id 关联；转写记录版本、引擎/模型来源、audio_sha256、时间片段、识别分数和状态，用户更正保留新版本。消息的原始 XML 不替换，转写文本不另存一套人物 Memory。
+
+月度输入及证据读取返回最新 transcription；正式月报仍写 Markdown，引用对应原消息和必要的转写片段。语音尚未归档或转写时明确标示缺口，不写成已分析。配置归档路径的分析服务会将相关转写修订纳入输入指纹；其他自建调用必须核对其实际 history_path 配置，不能假定仅消息 ID 不变就代表内容未变。

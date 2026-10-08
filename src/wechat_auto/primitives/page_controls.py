@@ -6,12 +6,55 @@ class NavigationControlError(RuntimeError):
     """A current-frame navigation control could not be uniquely located."""
 
 
+def find_private_chat_profile_avatar(image, boxes: list, state: dict, query: str) -> dict:
+    """Find the unique member avatar above its exact name in chat details."""
+    import cv2
+    import numpy as np
+
+    from wechat_auto.primitives.vision import normalize_text
+
+    geometry = state.get('geometry', {})
+    panel = geometry.get('right_panel_candidate')
+    if not panel or state.get('composer', {}).get('state') not in {'present', 'candidate'}:
+        raise NavigationControlError('Private chat details geometry absent')
+    panel_boxes = [b for b in boxes if b['x'] > panel['x']]
+    labels = {normalize_text(b['text']) for b in panel_boxes}
+    if not {'查找聊天内容', '消息免打扰', '置顶聊天'} <= labels:
+        raise NavigationControlError('Private chat details anchors absent')
+    names = [b for b in panel_boxes if normalize_text(b['text']) == normalize_text(query)]
+    if len(names) != 1:
+        raise NavigationControlError('Unique exact private member name absent')
+    name = names[0]
+    gray = cv2.cvtColor(np.asarray(image.convert('RGB')), cv2.COLOR_RGB2GRAY)
+    edges = cv2.Canny(gray, 30, 80)
+    contours, _ = cv2.findContours(edges, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
+    candidates = []
+    for contour in contours:
+        x, y, w, h = cv2.boundingRect(contour)
+        if (x <= panel['x'] or not .85 < w / h < 1.15
+                or not name['h'] * 1.5 < h < name['h'] * 4
+                or not 0 <= name['y'] - (y + h) < name['h']
+                or abs(x + w / 2 - (name['x'] + name['w'] / 2)) > name['h']
+                or abs(cv2.contourArea(contour)) / (w * h) < .65):
+            continue
+        if not any(abs(x-c['x']) < 4 and abs(y-c['y']) < 4 for c in candidates):
+            candidates.append({'x': x, 'y': y, 'w': w, 'h': h})
+    if len(candidates) != 1:
+        raise NavigationControlError('Private member avatar absent or ambiguous')
+    c = candidates[0]
+    return {**c, 'window_fraction': [(c['x']+c['w']/2)/image.width,
+                                     (c['y']+c['h']/2)/image.height],
+            'method': 'opencv_square_and_exact_member_ocr'}
+
+
 def find_navigation_control(image, operation: str) -> dict:
     """Match a public icon in the current sidebar, independent of window size.
 
     Templates encode glyph shapes, never button coordinates. Restrict matching
     to the sidebar measured from this image and reject competing spatial peaks.
     """
+    if operation == 'open_emoji_panel':
+        return find_composer_emoji_control(image)
     import cv2
     import numpy as np
 
@@ -56,11 +99,140 @@ def find_navigation_control(image, operation: str) -> dict:
         if not any(abs(c['x'] - p['x']) < max(c['w'], p['w']) * .6
                    and abs(c['y'] - p['y']) < max(c['h'], p['h']) * .6 for p in unique):
             unique.append(c)
-    if len(unique) != 1:
+    # Filled silhouettes of a bubble, compass and cube can produce weak
+    # cross-matches. Require a strong match and a clear gap to every other
+    # spatial peak; two equally plausible icons must still stop navigation.
+    if (not unique or unique[0]['score'] < .90
+            or len(unique) > 1 and unique[0]['score'] - unique[1]['score'] < .04):
         raise NavigationControlError('Current navigation glyph absent or ambiguous')
     c = unique[0]
     return {**c, 'window_fraction': [c['x'] / width, c['y'] / height],
             'method': 'opencv_multiscale_glyph', 'frame_size': [width, height]}
+
+
+def find_composer_emoji_control(image) -> dict:
+    """Match the public smile glyph inside the current composer frame."""
+    import cv2
+    import numpy as np
+    from PIL import Image
+
+    from wechat_auto.primitives.composer_templates import EMOJI_BUTTON
+    from wechat_auto.primitives.page_geometry import observe_geometry
+
+    composers = observe_geometry(image).get('composer_candidates',[])
+    if len(composers) != 1:
+        raise NavigationControlError('Unique composer geometry required for emoji button')
+    composer = composers[0]
+    x0 = composer['x']
+    y0 = composer['y']+composer['h']//2
+    gray = cv2.cvtColor(np.asarray(image.convert('RGB')),cv2.COLOR_RGB2GRAY)
+    patch = gray[y0:composer['y']+composer['h'],x0:composer['x']+composer['w']]
+    mask = np.uint8(np.abs(patch.astype(float)-np.median(patch))>35)
+    template = np.array([[int(v) for v in row] for row in EMOJI_BUTTON],dtype=np.uint8)
+    candidates = []
+    for scale in np.linspace(.6,1.8,49):
+        w,h = round(template.shape[1]*scale),round(template.shape[0]*scale)
+        if w >= patch.shape[1] or h >= patch.shape[0]:
+            continue
+        glyphs = [cv2.resize(template,(w,h),interpolation=i)
+                  for i in (cv2.INTER_NEAREST_EXACT,cv2.INTER_NEAREST)]
+        glyphs.append(np.asarray(Image.fromarray(template).resize((w,h),Image.Resampling.NEAREST)))
+        for glyph in glyphs:
+            scores = cv2.matchTemplate(mask,glyph,cv2.TM_CCOEFF_NORMED)
+            ys,xs = np.where(scores>=.85)
+            for x,y in zip(xs,ys,strict=True):
+                candidates.append({'x':x0+float(x+w/2),'y':y0+float(y+h/2),
+                                   'w':w,'h':h,'score':float(scores[y,x])})
+    candidates.sort(key=lambda c:c['score'],reverse=True)
+    unique=[]
+    for c in candidates:
+        if not any(abs(c['x']-p['x'])<max(c['w'],p['w'])*.6
+                   and abs(c['y']-p['y'])<max(c['h'],p['h'])*.6 for p in unique):
+            unique.append(c)
+    if not unique or unique[0]['score']<.90 or len(unique)>1 and unique[0]['score']-unique[1]['score']<.04:
+        raise NavigationControlError('Composer emoji glyph absent or ambiguous')
+    c=unique[0]
+    return {**c,'window_fraction':[c['x']/image.width,c['y']/image.height],
+            'method':'opencv_composer_smile_glyph','frame_size':list(image.size)}
+
+
+def find_emoji_favorites_control(image) -> dict:
+    """Match the public heart tab in the current native emoji popup footer."""
+    import cv2
+    import numpy as np
+
+    from wechat_auto.primitives.composer_templates import EMOJI_FAVORITES_TAB
+
+    gray=cv2.cvtColor(np.asarray(image.convert('RGB')),cv2.COLOR_RGB2GRAY)
+    y0=int(image.height*.8)
+    patch=gray[y0:]
+    mask=np.uint8(np.abs(patch.astype(float)-np.median(patch))>35)
+    template=np.array([[int(v) for v in row] for row in EMOJI_FAVORITES_TAB],dtype=np.uint8)
+    candidates=[]
+    for scale in np.linspace(.6,1.8,49):
+        w,h=round(template.shape[1]*scale),round(template.shape[0]*scale)
+        if w>=patch.shape[1] or h>=patch.shape[0]:
+            continue
+        glyph=cv2.resize(template,(w,h),interpolation=cv2.INTER_NEAREST_EXACT)
+        scores=cv2.matchTemplate(mask,glyph,cv2.TM_CCOEFF_NORMED)
+        ys,xs=np.where(scores>=.90)
+        for x,y in zip(xs,ys,strict=True):
+            candidates.append({'x':float(x+w/2),'y':y0+float(y+h/2),
+                               'w':w,'h':h,'score':float(scores[y,x])})
+    candidates.sort(key=lambda c:c['score'],reverse=True)
+    unique=[]
+    for c in candidates:
+        if not any(abs(c['x']-p['x'])<max(c['w'],p['w'])*.6
+                   and abs(c['y']-p['y'])<max(c['h'],p['h'])*.6 for p in unique):
+            unique.append(c)
+    if len(unique)!=1:
+        raise NavigationControlError('Current emoji favorites heart absent or ambiguous')
+    c=unique[0]
+    return {**c,'window_fraction':[c['x']/image.width,c['y']/image.height],
+            'method':'opencv_emoji_favorites_heart','frame_size':list(image.size)}
+
+
+def observe_emoji_panel(image,boxes:list,state:dict) -> None:
+    """Observe native emoji labels plus the public footer heart, without acting."""
+    from wechat_auto.actions.semantics import PageId
+    from wechat_auto.primitives.vision import normalize_text
+
+    if state.get('page')!='unknown' or state.get('geometry',{}).get('composer_candidates'):
+        return
+    labels={normalize_text(b['text']) for b in boxes if b.get('score',0)>=.65}
+    try:
+        heart=find_emoji_favorites_control(image)
+    except NavigationControlError:
+        return
+    favorites_selected=emoji_favorites_selected(image,heart)
+    if not {'最近使用','所有表情'}<=labels and not favorites_selected:
+        return
+    state.setdefault('panels',[]).append({'key':'emoji_panel','page_id':int(PageId.EMOJI_PANEL),
+                                        'layer':'panel','parent':'chat','state':'candidate',
+                                        'verification':'native_emoji_labels_and_public_footer_heart',
+                                        'action_authorized':False,'favorites_control':heart,
+                                        'favorites_selected':favorites_selected})
+
+
+def emoji_favorites_selected(image,heart:dict) -> bool:
+    """Require a contrasting current tab backplate surrounding the heart."""
+    import cv2
+    import numpy as np
+
+    gray=cv2.cvtColor(np.asarray(image.convert('RGB')),cv2.COLOR_RGB2GRAY)
+    contours,_=cv2.findContours(cv2.Canny(gray,8,25),cv2.RETR_LIST,cv2.CHAIN_APPROX_SIMPLE)
+    for contour in contours:
+        x,y,w,h=cv2.boundingRect(contour)
+        if (not heart['w']*1.4<w<heart['w']*3 or not heart['h']*1.4<h<heart['h']*3
+                or abs(x+w/2-heart['x'])>heart['w']*.25
+                or abs(y+h/2-heart['y'])>heart['h']*.25
+                or cv2.contourArea(contour)/(w*h)<.8):
+            continue
+        inside=gray[y+2:y+h-2,x+2:x+w-2]
+        outside=gray[max(0,y-8):y-2,x:x+w]
+        if outside.size and abs(float(np.median(inside))-float(np.median(outside)))>=8:
+            return True
+    return False
 
 
 def find_search_clear(image, field: dict) -> list[tuple[int, int]]:
@@ -100,6 +272,54 @@ def observe_selected_contacts(image, state: dict) -> None:
     state.update(page='contacts', page_id=int(PageId.CONTACTS),
                  selected_navigation={'page': 'contacts', 'verification': 'current_selected_green_glyph',
                                       'control': control})
+
+
+def observe_empty_chat(image, state: dict) -> None:
+    """Require the selected Chats glyph AND the public empty-state logo."""
+    import cv2
+    import numpy as np
+
+    from wechat_auto.actions.semantics import PageId
+    from wechat_auto.primitives.empty_chat_logo import EMPTY_CHAT_LOGO
+
+    if (state.get('page') != 'unknown' or state.get('composer', {}).get('geometry_candidates')
+            or any(state.get(k) for k in ('overlays', 'panels', 'content_windows'))):
+        return
+    try:
+        control = find_navigation_control(image, 'open_chats')
+    except NavigationControlError:
+        return
+    rgb = np.asarray(image.convert('RGB')).astype(float)
+    x, y, w, h = (control[k] for k in ('x', 'y', 'w', 'h'))
+    patch = rgb[round(y-h/2):round(y+h/2), round(x-w/2):round(x+w/2)]
+    green = ((patch[:, :, 1] > 100) & (patch[:, :, 1] > patch[:, :, 0]*1.5)
+             & (patch[:, :, 1] > patch[:, :, 2]*1.2))
+    if green.mean() < .15:
+        return
+    split = state.get('region_bounds', {}).get('conversation_header', [.25])[0]
+    gray = rgb[:, round(image.width*split):].mean(axis=2)
+    mask = np.uint8(np.abs(gray-np.median(gray)) >= 12)
+    template = np.array([[int(v) for v in row] for row in EMPTY_CHAT_LOGO], dtype='uint8')
+    hits = []
+    for scale in np.linspace(.6, 1.8, 25):
+        tw, th = round(template.shape[1]*scale), round(template.shape[0]*scale)
+        if tw >= mask.shape[1] or th >= mask.shape[0]:
+            continue
+        glyph = cv2.resize(template, (tw, th), interpolation=cv2.INTER_NEAREST_EXACT)
+        scores = cv2.matchTemplate(mask, glyph, cv2.TM_CCOEFF_NORMED)
+        ys, xs = np.where(scores >= .92)
+        for px, py in zip(xs, ys, strict=True):
+            hits.append((px+tw/2, py+th/2, tw, th))
+    unique = []
+    for hit in hits:
+        if not any(abs(hit[0]-p[0]) < max(hit[2],p[2])*.6
+                   and abs(hit[1]-p[1]) < max(hit[3],p[3])*.6 for p in unique):
+            unique.append(hit)
+    if len(unique) == 1:
+        state.update(page='main_without_selected_chat', page_id=int(PageId.MAIN_EMPTY),
+                     selected_navigation={'page': 'chat',
+                                          'verification': 'selected_chat_glyph_and_empty_logo',
+                                          'control': control})
 
 
 def find_contact_album_entry(image, label: dict, *, right: int | None = None) -> dict:

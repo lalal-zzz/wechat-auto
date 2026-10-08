@@ -55,6 +55,11 @@ class BasicSkill(BaseSkill):
             "prepare_visual_review": self.prepare_visual_review,
             "apply_visual_review": self.apply_visual_review,
             "prepare_search": self.prepare_search,
+            "reset_search_popup": self.reset_search_popup,
+            "select_search_result": self.select_search_result,
+            "verify_searched_contact_alias": self.verify_searched_contact_alias,
+            "close_private_chat_details": self.close_private_chat_details,
+            "send_current_verified_text": self.send_current_verified_text,
             "open_search_content": self.open_search_content,
             "prepare_text": self.prepare_text,
             "send_text": self.send_text,
@@ -75,6 +80,7 @@ class BasicSkill(BaseSkill):
             "prepare_image": self.prepare_image,
             "send_image": self.send_image,
             "open_emoji": self.open_emoji,
+            "open_emoji_favorites": self.open_emoji_favorites,
             "send_sticker": self.send_sticker,
             "send_sticker_by_id": self.send_sticker_by_id,
             "open_moments": self.open_moments,
@@ -118,7 +124,7 @@ class BasicSkill(BaseSkill):
             window['operations'] = [
                 {'name': op.name, 'locator': op.method,
                  'locator_implemented': op.method != 'visual_control' or op.name in {
-                     'open_contacts', 'open_chats', 'open_discover', 'open_main_menu'},
+                     'open_contacts', 'open_chats', 'open_discover', 'open_main_menu', 'open_emoji_panel'},
                  'preconditions_observed': window.get('enabled', True) and
                      window.get('status') == 'recognized' and (not overlays or bool(overlays & set(op.sources))),
                  'main_close_forbidden': op.method == 'wm_close' and window['is_main']}
@@ -432,9 +438,13 @@ class BasicSkill(BaseSkill):
 
         if not query.strip() or any(ord(c) < 32 for c in query):
             raise ValueError("Search query must be non-empty printable text")
-        image = self.vision.capture()
+        self.reset_search_popup()
+        from wechat_auto.utils.screenshot import ScreenshotHelper
+
+        self._activate()
+        image = ScreenshotHelper().capture_visible_window(self._app.handle)
         if image is None:
-            raise RuntimeError("Search window capture unavailable")
+            raise RuntimeError("Visible foreground search window capture unavailable")
         fields = observe_geometry(image).get("search_field_candidates", [])
         if len(fields) != 1:
             raise RuntimeError("Search field geometry is absent or ambiguous")
@@ -454,6 +464,12 @@ class BasicSkill(BaseSkill):
         existing = field_text(prior)
         if not existing:
             raise RuntimeError("Search field text unavailable; typing stopped")
+        if existing == normalize_text(query):
+            self.keyboard_only.click_window_fraction((field['x']+field['w']*.4)/image.width,
+                                                       (field['y']+field['h']/2)/image.height)
+            time.sleep(self._config.action_delay+.5)
+            return self._receipt('prepare_search', verified_by='visible_search_field_ocr',
+                                 selection_required=True, sent=False, input_dispatched=True)
         driver = self.keyboard_only
         if existing and existing != "搜索":
             clear = find_search_clear(image, field)
@@ -461,7 +477,11 @@ class BasicSkill(BaseSkill):
                 raise RuntimeError("Search clear control is absent or ambiguous")
             driver.click_window_fraction(clear[0][0] / image.width, clear[0][1] / image.height)
             time.sleep(self._config.action_delay)
-            empty = field_text(self.vision.ocr(region))
+            visible = ScreenshotHelper().capture_visible_window(self._app.handle)
+            if visible is None or visible.size != image.size:
+                raise RuntimeError('Visible search frame changed; typing stopped')
+            empty = field_text(self.vision.recognize_image(visible.crop((region[0],region[1],
+                region[0]+region[2],region[1]+region[3])), region=region, window_size=image.size))
             if empty != "搜索":
                 raise RuntimeError("Search field did not clear; typing stopped")
         driver.click_window_fraction((field["x"] + field["w"] * .4) / image.width,
@@ -469,12 +489,329 @@ class BasicSkill(BaseSkill):
         with driver.foreground_lease():
             driver._type_text(query)
             time.sleep(self._config.action_delay + .5)
-        observed = self.vision.ocr(region)
+        visible = ScreenshotHelper().capture_visible_window(self._app.handle)
+        if visible is None or visible.size != image.size:
+            raise RuntimeError('Visible search frame changed; no result selected')
+        observed = self.vision.recognize_image(visible.crop((region[0],region[1],
+            region[0]+region[2],region[1]+region[3])), region=region, window_size=image.size)
         joined = field_text(observed)
+        verification = 'visible_search_field_ocr'
         if normalize_text(query) != joined:
-            raise RuntimeError("Search field text was not verified; no result selected")
-        return self._receipt("prepare_search", verified_by="search_field_ocr",
+            if not self._search_popup_echo_matches(query):
+                raise RuntimeError("Search query was not verified; no result selected")
+            verification = 'owned_search_popup_query_echo'
+        return self._receipt("prepare_search", verified_by=verification,
                              selection_required=True, sent=False)
+
+    def reset_search_popup(self) -> dict:
+        """Dismiss only a recognized owned search popup before a new query."""
+        windows = self.inspect_windows()
+        auxiliary = [w for w in windows if not w['is_main']]
+        if not auxiliary:
+            return self._receipt('reset_search_popup', success=True, input_dispatched=False, sent=False)
+        if (len(auxiliary) != 1 or auxiliary[0].get('status') != 'recognized'
+                or auxiliary[0].get('owner_hwnd') != self._app.handle
+                or not {'search', 'search_suggestions'} & {s['page'] for s in auxiliary[0]['surfaces']}):
+            raise RuntimeError('Only one recognized owned search popup may be reset')
+        handle = auxiliary[0]['hwnd']
+        self.keyboard_only.press_key('escape')
+        time.sleep(self._config.action_delay + .5)
+        if any(w['hwnd'] == handle for w in self._app.list_windows()):
+            raise RuntimeError('Search popup did not dismiss; no new query typed')
+        return self._receipt('reset_search_popup', success=True, sent=False,
+                             verified_by='owned_search_popup_disappeared')
+
+    def _search_popup_echo_matches(self, query: str) -> bool:
+        """Read the literal first network suggestion, never choose that item."""
+        from wechat_auto.primitives.vision import (
+            VisionAutomation,
+            normalize_text,
+            parse_search_sections,
+        )
+
+        auxiliary = [w for w in self._app.list_windows() if not w['is_main']]
+        if (len(auxiliary) != 1 or auxiliary[0]['owner_hwnd'] != self._app.handle
+                or 'ToolSaveBits' not in auxiliary[0]['class']):
+            return False
+        observer = VisionAutomation(self._app.for_window(auxiliary[0]['hwnd']), self._config)
+        observation = observer.observe_page()
+        if not observation.get('ok'):
+            return False
+        blocks = [s for s in parse_search_sections(observation['boxes']) if s['section'] == 'web']
+        if len(blocks) != 1 or not blocks[0]['items']:
+            return False
+        first = min(blocks[0]['items'], key=lambda b: (b['y'], b['x']))
+        return first.get('score', 0) >= .65 and normalize_text(first['text']) == normalize_text(query)
+
+    def _visible_search_query_matches(self, query: str) -> bool:
+        """Recheck the current visible field when web suggestions are offscreen."""
+        from wechat_auto.primitives.page_geometry import observe_geometry
+        from wechat_auto.primitives.vision import normalize_text
+        from wechat_auto.utils.screenshot import ScreenshotHelper
+
+        image = ScreenshotHelper().capture_visible_window(self._app.handle)
+        if image is None:
+            return False
+        fields = observe_geometry(image).get('search_field_candidates',[])
+        if len(fields) != 1:
+            return False
+        field = fields[0]
+        region = (field['x']+int(field['w']*.13),field['y'],int(field['w']*.75),field['h'])
+        boxes = self.vision.recognize_image(image.crop((region[0],region[1],
+            region[0]+region[2],region[1]+region[3])),region=region,window_size=image.size)
+        text = ''.join(normalize_text(b['text']) for b in boxes if b.get('score',0) >= .65
+                       and field['x']+field['w']*.08 < b['x']+b['w']/2 < field['x']+field['w']*.88)
+        return text == normalize_text(query)
+
+    def select_search_result(self, query: str, *, section: str, username: str,
+                             result_name: str | None = None) -> dict:
+        """Select one exact owned-popup result; never a web/history candidate."""
+        from wechat_auto.primitives.vision import (
+            VisionAutomation,
+            normalize_text,
+            scoped_search_matches,
+        )
+
+        if section not in {'contact', 'function'} or not username:
+            raise ValueError('Stable identity and contact/function section required')
+        system = section == 'function' and username == 'filehelper' and query == '文件传输助手'
+        if section == 'function' and not system:
+            raise ValueError('Only the built-in FileHelper function is supported')
+        name = result_name or query
+        if system and name != query:
+            raise ValueError('Built-in function name must match its query')
+        self._recipient_lease = None
+        self._pending_recipient = None
+        windows = self._app.list_windows()
+        auxiliary = [w for w in windows if not w['is_main']]
+        if (len(auxiliary) != 1 or auxiliary[0]['owner_hwnd'] != self._app.handle
+                or 'ToolSaveBits' not in auxiliary[0]['class']):
+            raise RuntimeError('Unique owned search popup required')
+        target = self._app.for_window(auxiliary[0]['hwnd'])
+        observer = VisionAutomation(target, self._config)
+        observation = observer.observe_page()
+        if not observation.get('ok') or not (self._visible_search_query_matches(query)
+                                             or self._search_popup_echo_matches(query)):
+            raise RuntimeError('Current search query not verified')
+        matches, _ = scoped_search_matches(observation['boxes'], name, section)
+        if len(matches) != 1:
+            raise RuntimeError('Exact result in the requested section absent or ambiguous')
+        metadata = self._app.describe_window(target.handle)
+        if any(metadata[k] != auxiliary[0][k] for k in ('pid','rect','client_rect','dpi','owner_hwnd')):
+            raise StaleFrameError('Search popup changed before selection')
+        child = BasicSkill(target, self._config, self._session)
+        child.keyboard_only.foreground_mode = 'never'
+        child.keyboard_only.click_window_fraction(*self._box_center_fraction(matches[0], tuple(observation['state']['size'])))
+        time.sleep(self._config.action_delay + .5)
+        after = self.vision.observe_page(visible=True)
+        state = after.get('state', {})
+        header = [b for b in state.get('regions', {}).get('conversation_header', [])
+                  if normalize_text(b['text']) == normalize_text(name)]
+        if (not after.get('ok') or len(header) != 1
+                or state.get('composer',{}).get('state') != 'present'
+                or any(not w['is_main'] for w in self._app.list_windows())):
+            raise RuntimeError('Search result did not open a uniquely verified chat')
+        if system:
+            self._recipient_lease = {'username':username, 'query':query,
+                                    'metadata':self._app.describe_window(self._app.handle),
+                                    'verification':'built_in_function_section_and_chat'}
+        else:
+            self._pending_recipient = {'username':username, 'query':name,
+                                       'metadata':self._app.describe_window(self._app.handle)}
+        return self._receipt('select_search_result', success=True, sent=False,
+                             identity_verified=system, alias_verification_required=not system,
+                             verified_by='exact_scoped_search_and_chat')
+
+    def verify_searched_contact_alias(self, expected_alias: str) -> dict:
+        """Open the searched chat's profile, verify alias, then return to that chat."""
+        from wechat_auto.primitives.vision import normalize_text
+
+        pending = getattr(self, '_pending_recipient', None)
+        if not pending or not expected_alias or pending['username'].endswith('@chatroom'):
+            raise PermissionError('Searched private contact and archived alias required')
+        current = self._app.describe_window(self._app.handle)
+        if any(current[k] != pending['metadata'][k] for k in ('hwnd','pid','rect','client_rect','dpi')):
+            raise StaleFrameError('Searched contact window changed before profile verification')
+        auxiliary = [w for w in self._app.list_windows() if not w['is_main']]
+        if auxiliary:
+            return self._finish_searched_contact_alias(expected_alias,pending,auxiliary)
+        self._activate()
+        observation = self.vision.observe_page(visible=True)
+        state = observation.get('state',{})
+        titles = [observation['boxes'][b['box_index']] for b in state.get('regions',{}).get('conversation_header',[])
+                  if normalize_text(b['text']) == normalize_text(pending['query'])]
+        if not observation.get('ok') or len(titles) != 1 or state.get('composer',{}).get('state') not in {'present','candidate'}:
+            raise RuntimeError('Searched conversation not currently verified')
+        from wechat_auto.primitives.page_controls import (
+            find_private_chat_profile_avatar,
+        )
+        panel = state.get('geometry',{}).get('right_panel_candidate')
+        if not panel:
+            self.keyboard_only.click_window_fraction(*self._box_center_fraction(titles[0],tuple(state['size'])))
+            time.sleep(self._config.action_delay + .5)
+            observation = self.vision.observe_page(visible=True)
+            state = observation.get('state',{})
+        if not observation.get('ok'):
+            raise RuntimeError('Chat details observation failed')
+        panel = state.get('geometry',{}).get('right_panel_candidate')
+        if panel:
+            anchors = [b for b in observation['boxes']
+                       if b['x'] > panel['x'] and normalize_text(b['text']) == '查找聊天内容']
+            if len(anchors) == 1:
+                image = self.vision._last_observed_image
+                region = (panel['x'],0,image.width-panel['x'],anchors[0]['y'])
+                observation['boxes'] = [b for b in observation['boxes']
+                                        if not (b['x'] > panel['x'] and b['y'] < anchors[0]['y'])]
+                observation['boxes'] += self.vision.recognize_image(
+                    image.crop((region[0],0,image.width,region[3])),
+                    region=region,window_size=image.size,upscale=2)
+        avatar = find_private_chat_profile_avatar(self.vision._last_observed_image,
+                                                  observation['boxes'],state,pending['query'])
+        self.keyboard_only.click_window_fraction(*avatar['window_fraction'])
+        time.sleep(self._config.action_delay + .5)
+        auxiliary = [w for w in self._app.list_windows() if not w['is_main']]
+        return self._finish_searched_contact_alias(expected_alias,pending,auxiliary)
+
+    def _finish_searched_contact_alias(self, expected_alias: str, pending: dict,
+                                      auxiliary: list) -> dict:
+        from wechat_auto.primitives.vision import VisionAutomation, normalize_text
+
+        if (len(auxiliary) != 1 or auxiliary[0]['pid'] != pending['metadata']['pid']
+                or auxiliary[0]['owner_hwnd'] not in {0,self._app.handle}
+                or 'ToolSaveBits' not in auxiliary[0]['class']):
+            raise RuntimeError('Unique same-process profile card did not open')
+        target = self._app.for_window(auxiliary[0]['hwnd'])
+        observer = VisionAutomation(target,self._config)
+        profile = observer.observe_page()
+        if not profile.get('ok') or profile['state']['page'] != 'contact_profile':
+            raise RuntimeError('Current profile card page not recognized')
+        if any(normalize_text(b['text']) in {'添加到通讯录','添加朋友'} for b in profile['boxes']):
+            raise PermissionError('Contact state does not permit this send')
+        self._verify_contact_alias(expected_alias,observer=observer)
+        closed = self.page_operation('close', hwnd=target.handle,
+                                      expected_page='contact_profile',max_attempts=1)
+        if not closed['success']:
+            raise RuntimeError('Verified profile card did not close')
+        restored = self.close_private_chat_details(pending['query'])
+        if not restored['success']:
+            raise RuntimeError('Verified contact details did not close')
+        returned = self.vision.observe_page(visible=True)
+        titles = [b for b in returned.get('state',{}).get('regions',{}).get('conversation_header',[])
+                  if normalize_text(b['text']) == normalize_text(pending['query'])]
+        if not returned.get('ok') or len(titles) != 1 or any(not w['is_main'] for w in self._app.list_windows()):
+            raise RuntimeError('Verified contact chat did not resume')
+        self._recipient_lease = {**pending,'metadata':self._app.describe_window(self._app.handle),
+                                'verification':'contact_section_profile_alias_and_same_chat'}
+        self._pending_recipient = None
+        return self._receipt('verify_searched_contact_alias',success=True,sent=False,
+                             identity_verified=True,verified_by='exact_profile_alias_and_same_chat')
+
+    def close_private_chat_details(self, query: str) -> dict:
+        """Close only the current private details panel through its title toggle."""
+        from wechat_auto.primitives.vision import normalize_text
+
+        if any(not w['is_main'] for w in self._app.list_windows()):
+            raise RuntimeError('Auxiliary window blocks details close')
+        self._activate()
+        observed = self.vision.observe_page(visible=True)
+        state = observed.get('state',{})
+        panel = state.get('geometry',{}).get('right_panel_candidate')
+        if not observed.get('ok') or not panel:
+            raise RuntimeError('Current private details panel unavailable')
+        labels = {normalize_text(b['text']) for b in observed['boxes'] if b['x'] > panel['x']}
+        if not {'查找聊天内容','消息免打扰','置顶聊天'} <= labels:
+            raise RuntimeError('Current private details panel anchors absent')
+        titles = [observed['boxes'][b['box_index']] for b in state['regions']['conversation_header']
+                  if normalize_text(b['text']) == normalize_text(query)]
+        if len(titles) != 1:
+            raise RuntimeError('Exact chat title unavailable')
+        self.keyboard_only.click_window_fraction(*self._box_center_fraction(titles[0],tuple(state['size'])))
+        time.sleep(self._config.action_delay + .5)
+        after = self.vision.observe_page(visible=True)
+        success = (after.get('ok') and not after['state']['geometry'].get('right_panel_candidate')
+                   and after['state']['composer']['state'] == 'present')
+        return self._receipt('close_private_chat_details',success=bool(success),sent=False,
+                             verified_by='details_disappeared_and_composer_observed')
+
+    def send_current_verified_text(self, text: str, *, confirm: bool = False) -> dict:
+        """Send once after exact recipient/draft checks; observe the outgoing result."""
+        from wechat_auto.primitives.vision import normalize_text
+
+        if not confirm:
+            raise PermissionError('Sending requires explicit confirmation')
+        if not text or any(ord(c) < 32 for c in text):
+            raise ValueError('A nonempty printable confirmed body is required')
+        lease = getattr(self, '_recipient_lease', None)
+        if not lease:
+            raise PermissionError('Verified stable recipient lease required')
+        def checked():
+            metadata = self._app.describe_window(self._app.handle)
+            if (any(metadata[k] != lease['metadata'][k] for k in ('hwnd','pid','rect','client_rect','dpi'))
+                    or any(not w['is_main'] for w in self._app.list_windows())):
+                raise RuntimeError('Recipient window changed or auxiliary window appeared')
+            observation = self.vision.observe_page(visible=True)
+            state = observation.get('state', {})
+            titles = [b for b in state.get('regions',{}).get('conversation_header', [])
+                      if normalize_text(b['text']) == normalize_text(lease['query'])]
+            candidates = state.get('geometry',{}).get('composer_candidates', [])
+            if (not observation.get('ok') or len(titles) != 1 or state.get('overlays')
+                    or state.get('composer',{}).get('state') != 'present' or len(candidates) != 1):
+                raise RuntimeError('Current recipient/header/composer not verified')
+            send_labels = [b for b in observation['boxes'] if normalize_text(b['text']) in {
+                '发送','发送(S)','发送（S）'} and b['y'] >= candidates[0]['y']
+                and b['x']+b['w']/2 > candidates[0]['x']+candidates[0]['w']*.7]
+            if len(send_labels) != 1:
+                raise RuntimeError('Composer action row absent or ambiguous')
+            action_top = send_labels[0]['y'] - send_labels[0]['h']*.25
+            body = ''.join(b['text'] for b in sorted(state['regions']['composer'],key=lambda b:(
+                observation['boxes'][b['box_index']]['y'],observation['boxes'][b['box_index']]['x']))
+                if (observation['boxes'][b['box_index']]['y']
+                    + observation['boxes'][b['box_index']]['h']/2) < action_top)
+            return observation, normalize_text(body), candidates[0]
+        self._activate()
+        before, body, frame = checked()
+        previous_matches = sum(normalize_text(b['text']) == normalize_text(text)
+                               for b in before['boxes'] if b['y'] < frame['y']
+                               and b['x']+b['w']/2 > before['state']['size'][0]*.6)
+        if body:
+            raise RuntimeError('Existing draft present; no typing or sending')
+        size = before['state']['size']
+        self.keyboard_only.click_window_fraction((frame['x']+frame['w']/2)/size[0],
+                                                 (frame['y']+frame['h']*.3)/size[1])
+        self.keyboard_only._type_text(text)
+        time.sleep(self._config.action_delay + .5)
+        draft, body, _ = checked()
+        if body != normalize_text(text):
+            raise RuntimeError('Confirmed draft text not exactly observed; no send dispatched')
+        send = [b for b in draft['boxes'] if normalize_text(b['text']) in {'发送','发送(S)','发送（S）'}
+                and b['y'] >= frame['y'] and b.get('score',0) >= .65]
+        if len(send) != 1:
+            raise RuntimeError('Unique current Send button not observed; no send dispatched')
+        self._recipient_lease = None
+        self.keyboard_only.click_window_fraction(*self._box_center_fraction(send[0],tuple(size)))
+        time.sleep(self._config.action_delay + .8)
+        after = self.vision.observe_page(visible=True)
+        state = after.get('state',{})
+        remaining = [b for b in state.get('regions',{}).get('composer',[]) if normalize_text(b['text']) == normalize_text(text)]
+        outgoing = [b for b in after.get('boxes',[]) if normalize_text(b['text']) == normalize_text(text)
+                    and b['x']+b['w']/2 > size[0]*.6 and b['y'] < frame['y']]
+        import numpy as np
+
+        image = getattr(self.vision, '_last_observed_image', None)
+        green_outgoing = []
+        for box in outgoing:
+            if image is None:
+                continue
+            pixels = np.asarray(image.crop((box['x'],box['y'],box['x']+box['w'],box['y']+box['h'])))
+            if pixels.size and ((pixels[:,:,1] > 100) & (pixels[:,:,1] > pixels[:,:,0].astype(float)*1.25)
+                                & (pixels[:,:,1] > pixels[:,:,2].astype(float)*1.15)).mean() >= .2:
+                green_outgoing.append(box)
+        failure = any('发送失败' in b['text'] or '消息已发出，但被对方拒收' in b['text']
+                      for b in after.get('boxes',[]))
+        verified = after.get('ok') and not remaining and len(green_outgoing) > previous_matches and not failure
+        return self._receipt('send_current_verified_text', success=bool(verified), dispatched=True,
+                             sent=bool(verified), delivery_verified=False, automatic_retry=False,
+                             verified_by='outgoing_text_and_cleared_draft' if verified else 'result_unknown')
 
     def open_search_content(self, query: str) -> dict:
         """Open the exact verified main-field query in the embedded network pane."""
@@ -620,7 +957,9 @@ class BasicSkill(BaseSkill):
                 if len(boxes) != 1:
                     raise RuntimeError("Page control absent or ambiguous; action stopped")
                 if spec.method == 'profile_album':
-                    from wechat_auto.primitives.page_controls import find_contact_album_entry
+                    from wechat_auto.primitives.page_controls import (
+                        find_contact_album_entry,
+                    )
                     image = observer.capture()
                     if image is None or tuple(image.size) != tuple(before['state']['size']):
                         raise StaleFrameError('Profile changed before album control observation')
@@ -1376,13 +1715,44 @@ class BasicSkill(BaseSkill):
     def open_emoji(self) -> dict:
         return self.page_operation('open_emoji_panel')
 
+    def open_emoji_favorites(self) -> dict:
+        """Open the favorites tab by its current public glyph; never send a cell."""
+        from wechat_auto.primitives.page_controls import (
+            emoji_favorites_selected,
+            find_emoji_favorites_control,
+        )
+        from wechat_auto.primitives.vision import VisionAutomation
+
+        windows=[w for w in self._app.list_windows() if not w['is_main']]
+        metadata=self._app.describe_window(self._app.handle)
+        if (len(windows)!=1 or windows[0]['pid']!=metadata['pid']
+                or windows[0]['owner_hwnd'] not in {0,self._app.handle}
+                or 'ToolSaveBits' not in windows[0]['class']):
+            raise RuntimeError('Unique same-process emoji popup required')
+        target=self._app.for_window(windows[0]['hwnd'])
+        observer=VisionAutomation(target,self._config)
+        before=observer.observe_page()
+        if not before.get('ok') or not any(p['key']=='emoji_panel' for p in before['state']['panels']):
+            raise RuntimeError('Current native emoji popup not recognized')
+        heart=find_emoji_favorites_control(observer._last_observed_image)
+        if not emoji_favorites_selected(observer._last_observed_image,heart):
+            current=self._app.describe_window(target.handle)
+            if any(current[k]!=windows[0][k] for k in ('hwnd','pid','rect','client_rect','dpi')):
+                raise StaleFrameError('Emoji popup changed before tab selection')
+            child=BasicSkill(target,self._config,self._session)
+            child.keyboard_only.foreground_mode='never'
+            child.keyboard_only.click_window_fraction(*heart['window_fraction'])
+            time.sleep(self._config.action_delay+.5)
+        after=observer.observe_page()
+        selected=(after.get('ok') and emoji_favorites_selected(observer._last_observed_image,
+                  find_emoji_favorites_control(observer._last_observed_image)))
+        return self._receipt('open_emoji_favorites',success=bool(selected),sent=False,
+                             verified_by='current_heart_tab_backplate',automatic_retry=False)
+
     def send_sticker(self, cell: tuple[float, float], *, confirm: bool = False) -> dict:
         if not confirm:
             raise PermissionError("Sticker send requires confirm=True")
-        self.open_emoji()
-        time.sleep(self._config.action_delay)
-        self.click(*cell)
-        return {"action": "send_sticker", "transport": "hwnd", "sent": True}
+        raise RuntimeError('Sticker sending requires current-frame asset matching; raw cell coordinates are not accepted')
 
     def send_sticker_by_id(self, contact: str, sticker_id: str, catalog_path: str,
                            *, confirm: bool = False) -> dict:

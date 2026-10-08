@@ -4,8 +4,11 @@ from __future__ import annotations
 import re
 
 from wechat_auto.actions.semantics import PageId
+from wechat_auto.primitives.moments_observation import (
+    has_calendar_rows,
+    parse_album_visibility_hint,
+)
 from wechat_auto.primitives.page_catalog import PAGE_CATALOG_VERSION, match_page_catalog
-from wechat_auto.primitives.moments_observation import has_calendar_rows
 
 REGIONS = {
     "navigation": (0, 0, .07, 1),
@@ -110,6 +113,27 @@ def classify_page(boxes: list[dict], size: tuple[int, int], *,
         page = "main_without_selected_chat"
     catalog_matches = match_page_catalog(boxes, size, bounds=zones,
                                          minimum_score=minimum_score)
+    if not send and any(m['key'] in {'search', 'search_suggestions'} for m in catalog_matches):
+        # A system-account name inside search results is not an open chat.
+        catalog_matches = [m for m in catalog_matches if m['key'] != 'file_transfer']
+    # Scrolled standalone albums can lose their "album" heading. Accept only
+    # the combined year/calendar column and explicit visibility footer, with
+    # no chat composer or competing base-page classification. A name or a
+    # visibility sentence on its own does not identify this page.
+    if not send and not candidates and not any(m['layer'] == 'base' for m in catalog_matches):
+        readable = [(i, b, re.sub(r'\s+', '', b.get('text', '')))
+                    for i, b in enumerate(boxes) if b.get('score', 0) >= minimum_score]
+        years = [(i, b) for i, b, t in readable if re.fullmatch(r'\d{4}年', t)
+                 and b['x'] < width*.25 and b['y'] < height*.3]
+        dates = [(i, t) for i, b, t in readable if b['x'] < width*.25 and b['y'] > height*.12]
+        footers = [i for i, b, t in readable if b['y'] > height*.5
+                   and parse_album_visibility_hint(t)[1]]
+        if len(years) == 1 and len(footers) == 1 and has_calendar_rows([t for _, t in dates]):
+            catalog_matches.append({'page_id': int(PageId.MOMENTS_PERSON), 'key': 'moments_person',
+                                    'label': '个人朋友圈/相册', 'layer': 'base', 'parent': 'contact_profile',
+                                    'state': 'candidate', 'evidence_box_indices': [years[0][0], *[i for i, _ in dates], footers[0]],
+                                    'verification': 'calendar_year_and_explicit_visibility_footer',
+                                    'action_authorized': False})
     # A personal album opened from a profile is an embedded right tab in
     # current 4.x. Its header says Moments, with pinned/calendar rows below.
     # Keep it separate from the central profile and from a generic feed.

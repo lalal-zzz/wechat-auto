@@ -45,7 +45,7 @@
 | 34 | 群名称编辑 (`group_name`) | overlay | group_details | anchor_rule | 群聊名称；保存/完成 | 待实机截图与验收 |
 | 35 | 邀请群成员 (`group_invite`) | overlay | group_details | anchor_rule | 选择联系人；确定/邀请 | 待实机截图与验收 |
 | 40 | 朋友圈信息流 (`moments_feed`) | base | - | anchor_rule | 朋友圈；朋友的新动态/今天/昨天/赞/评论 | 4.1.15.9 深色/144 DPI 已采样；其他环境待验收 |
-| 41 | 个人朋友圈/相册 (`moments_person`) | base | contact_profile | anchor_rule | 相册/个人相册；今天/昨天/朋友圈 | 待实机截图与验收 |
+| 41 | 个人朋友圈/相册 (`moments_person`) | base / 右侧 panel | contact_profile | anchor_rule / runtime_fusion | 相册/个人相册；今天/昨天/朋友圈；右侧标签结合资料、置顶或独立月日列 | 不同布局与权限状态需分别验收 |
 | 42 | 单条朋友圈详情 (`moments_detail`) | window | moments_feed | template_required | 需要结构/身份/模板补充 | 待实机截图与验收 |
 | 43 | 朋友圈评论输入 (`moments_comment`) | overlay | moments_detail | anchor_rule | 评论；取消/发表 | 待实机截图与验收 |
 | 44 | 发布朋友圈 (`moments_publish`) | window | moments_feed | anchor_rule | 发表朋友圈/发布朋友圈；发表/谁可以看/所在位置 | 待实机截图与验收 |

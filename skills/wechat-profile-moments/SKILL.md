@@ -47,6 +47,14 @@ description: 将资料和朋友圈变化整理为带时间来源的人物证据�
 
 当前资料和朋友圈先调用 `sync.contacts_moments_local`；需要加载指定相册时联动 wechat-ui-navigation，身份有歧义时联动 wechat-identity-audit。UI 加载后重新读库，再由 wechat-sync 索引。变更证据交给 wechat-person-analysis，长期事件再交给 wechat-timeline。每次交接说明身份、来源范围、覆盖、水位、成功输出和缺口。此流程不授权自动下载；导航受限或停滞时停止，不清空旧字段，也不把部分覆盖说成完整。
 
+## UI 排错与实测规划
+
+遇到搜索、资料入口、输入区、发送结果或表情定位问题时，读取随包的
+[UI_FAILURE_RECOVERY.md](references/UI_FAILURE_RECOVERY.md)。按其中的问题/处理表区分
+已实现处理与剩余缺口，保留首次失败回执；发送 unknown 仅增加只读复核证据，不自动重发。
+用户要求 OpenCV + OCR 全流程实测时，正常步骤不依赖 Agent 看图，失败后才图片排错。
+具体账号、正文、截图与运行流水只存本机忽略的台账，不写入 Skill。
+
 ## 随包资源范围
 
 执行规则、参考文档与模板只读取本 Skill 目录中的 `references/`、`assets/` 和已提供的 `scripts/`，相对路径从本 Skill 目录解析。不能跨目录借用另一个 Skill 的参考资源；缺少必需随包资源时报告缺失，维护时补齐本目录副本。其他 Skill 名称仅表示流程职责与上下游，不代替本目录资源。项目运行接口、正式数据路径与项目命令是运行依赖，不是外部指令来源；不为打包复制私人数据。

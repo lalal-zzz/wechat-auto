@@ -56,7 +56,7 @@ OPERATIONS = (
                   method="ocr_cancel", anchors=("取消",)),
     PageOperation("dismiss", ("contact_more", "main_menu", "message_menu", "moments_menu"),
                   method="escape"),
-    PageOperation("close", ("settings", "media_viewer", "file_preview", "moments_person",
+    PageOperation("close", ("settings", "media_viewer", "file_preview", "moments_person", "contact_profile", "emoji_panel",
                             "moments_detail", "channels", "mini_program", "chat_history"),
                   method="wm_close"),
 )

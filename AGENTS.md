@@ -88,42 +88,28 @@ raw_profile
 
 人员 Memory、资料变化、性格分析和演化结论必须最终写入 Markdown；SQLite 只保存原始消息、媒体、索引、游标、任务状态和证据关联，不把分析正文隐藏在数据库 JSON 中。
 
-建议目录：
+项目级正式路径以当前 Skill 的 `references/MEMORY_STORAGE_CONTRACT.md` 为准；
+共用存储契约变更同步实际依赖它的 Skill 随包文档。
+结构化数据统一写入 `data/wechat_memory.sqlite3`；Markdown 只保存紧凑完整正文：
 
 ```text
 data/memory/
 ├── index.md
-├── self/
-│   ├── profile.md
-│   ├── profile_history.md
-│   ├── identity_signals.md
-│   ├── personality.md
-│   ├── communication.md
-│   ├── values.md
-│   ├── emotional_patterns.md
-│   ├── relationship_patterns.md
-│   ├── decision_style.md
-│   ├── blind_spots.md
-│   ├── goals.md
-│   ├── growth.md
-│   └── timeline.md
-├── contacts/{person_id}/
-│   ├── profile.md
-│   ├── profile_history.md
-│   ├── personality.md
-│   ├── communication.md
-│   ├── preferences.md
-│   ├── relationship.md
-│   └── timeline.md
-├── groups/{group_id}/
-│   ├── profile.md
-│   ├── members.md
-│   ├── member_roles.md
-│   ├── communication_rules.md
-│   ├── topics.md
-│   └── timeline.md
-└── relationships/{relationship_id}.md
+├── conversations/{conversation_id}/
+│   ├── current.md
+│   ├── versions/v000001.md
+│   └── months/{YYYY-MM}/
+│       ├── current.md
+│       └── versions/v000001.md
+├── people/{person_id}/current.md
+├── people/{person_id}/versions/v000001.md
+├── relationships/{relationship_id}/current.md
+└── dashboard/
 ```
+
+自己和联系人均按稳定 person_id 保存，群聊天归 conversations，不另建平行画像。
+未验收候选和阅读进度只放 `data/work/analysis/{run_id}/`。来源和解析后的
+数据库/正文路径固定记录于 `data/analysis_sources.json`。不得把测试目录用作正式输出。
 
 每份文档必须包含可追踪的元数据，例如 `type`、`target_id`、`updated_at`、`source_range`、`analysis_version`、`confidence` 和 `status`。
 
@@ -171,6 +157,26 @@ data/memory/
 
 ### 6. 分析流水线
 
+分析 Skill 必须读取自身 `references/ANALYSIS_QUALITY_STANDARD.md` 随包副本
+（共用语义标准变更同步实际依赖它的 Skill 随包文档）。全历史
+不能默认缩为最新月；读取行数/水位与 Agent 实际语义阅读覆盖分别记录。完整分析
+按时间块阅读全部可用文本，不以关键词统计和少量最长片段替代。月度必须分别
+检查事项/话题/任务，以及双方或群成员的具体事实、兴趣/喜恶、场景行为、情绪、
+价值观、聊天习惯、边界和变化。会话分析细到本会话事情与互动；人物分析依赖
+成功的私聊/共同群会话版本、个人资料历史、朋友圈及用户修正，综合去重但保留
+跨场景差异。共同群按稳定成员身份和有效期归属发言/角色；他人评价不算本人
+行为，不把沉默当性格，不把同一事件跨群转发算独立证据。会话分析可独立完成，
+不等待全局画像。适用朋友、同事、客户、家人、群聊；恋爱是条件场景。
+生日出现或被点名时区分历法/登记/庆祝日；交付、入职、考试等区分计划/实际日期。
+首次见面、表白、确认关系与约定纪念日仅在适用场景分别查证。
+有到日的明确证据就输出具体日期，漏检不能写成未知。旧抽样/事件型模板按受影响
+范围重建；修改 Skill 不代表已有私人分析已重建或 MCP 自动质量门禁已实现。
+
+v7 主体、双向社会关系与授权多agent合同见分析质量标准；亲友的事实不能归给
+讲述人。speaker、事件 actor/事实 owner、relation owner 与提及/引用第三方分别
+记录；亲属/朋友/师兄称谓按所属者和来源范围保留 scoped reference，不仅凭称谓
+或姓名建立/合并 Person。旧 v6 及更早结果须按受影响范围重读和主体重审，不得默认作为可信上游。
+
 未来实现应遵循：
 
 ```text
@@ -190,6 +196,16 @@ data/memory/
     ↓
 构造回复上下文或草稿
 ```
+
+约定表达、暗号、梗及省略语须按会话保存原表达、实际含义、双方理解依据、
+使用条件、回应、反例和时间变化。区分语言约定与行动承诺；历史词义不能替代
+本次动作确认。执行细则见分析 Skill 随包提供的质量标准参考文档。
+
+事件分析须读取当前 Skill 的 `references/EVENT_ANALYSIS_STANDARD.md` 随包副本，
+还原背景、参与人诉求、
+阶段行动、决定、变更、结果与开放事项。跨月/跨年用可靠衔接追踪同一事件，
+区分再次发生与主题相似；月份边界不充当事件起止，完整当前阶段不能只含本月新增。
+事件详细正文仍在会话 Markdown，现有 event_versions 不代表完整阶段/关联历史图已实现。
 
 所有结论必须能回溯到消息、资料快照、朋友圈或用户确认；冲突结论不能静默覆盖，必须保留历史并标记有效期或状态。
 
@@ -244,8 +260,9 @@ Memory schema 3 增量迁移保留历史。导航使用当前截图 OpenCV 图�
   当前状态先同步相关来源，按月份→会话→人物/事件→图表更新受影响节点。
 - 回复先读当前会话增量；身份、状态或相关分析无法核对时明确 unknown/stale，
   不把旧结论称作当前事实。新消息或上下文变化影响草稿时重建并重新确认。
-- 联动是当前 Agent 读取其他 Skill 并使用其工具流程，不自动创建子代理、后台
-  调度或跨任务消息，也不继承发送、修改资料和下载的确认权限。
+- 联动本身不授权创建子代理、后台调度或跨任务消息；用户明确要求多子agent
+  分析时，执行 v7 的动态全量分片、独立月份与独立主体/关系复核，主协调者串行写库。
+  不创建额外 Codex 用户聊天/定时任务，不继承发送、修改资料和下载的确认权限。
 - 交接稳定范围、真实覆盖、水位/输入版本、成功输出版本和缺口；相同输入不
   重复触发下游。不新增重复画像或大量结构化文本文件保存同一交接状态。
 - Skill 约定不能当作 MCP 已有自动门禁；工具未提供的按范围新鲜度与依赖就绪

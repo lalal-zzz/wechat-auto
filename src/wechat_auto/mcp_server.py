@@ -32,7 +32,7 @@ def _mcp_class():
 def create_server(*, memory_db: str, memory_root: str,
                   history_db: str | None = None, moments_db: str | None = None,
                   profiles_db: str | None = None, basic_skill=None,
-                  conversation_backend=None):
+                  conversation_backend=None, voice_model_path: str | None = None):
     """Create an MCP server without opening a network listener."""
     MCPServer = _mcp_class()
     store = MemoryStore(memory_db)
@@ -53,7 +53,7 @@ def create_server(*, memory_db: str, memory_root: str,
     # Kept for process-lifetime cleanup and lightweight integration tests.
     server._wechat_auto_store = store
     markdown = MarkdownMemory(memory_root, store)
-    analysis = AnalysisService(store, markdown)
+    analysis = AnalysisService(store, markdown, history_db)
     context = ContextBuilder(store, markdown, history_db)
     evidence = EvidenceResolver(history_path=history_db, moments_path=moments_db,
                                 profiles_path=profiles_db)
@@ -218,9 +218,9 @@ def create_server(*, memory_db: str, memory_root: str,
                 "current_person_memory": markdown.read_current("person", person_id)}
 
     @server.tool(name="analysis.claim_job")
-    def analysis_claim_job(worker_id: str = "agent") -> dict | None:
-        """Atomically claim one analysis job so agents do not duplicate work."""
-        return store.claim_next_job(worker_id=worker_id)
+    def analysis_claim_job(worker_id: str = "agent", job_id: str | None = None) -> dict | None:
+        """Claim the next job or a specified pending job without taking another scope."""
+        return store.claim_next_job(worker_id=worker_id, job_id=job_id)
 
     @server.tool(name="analysis.complete_job")
     def analysis_complete_job(job_id: str, success: bool, error: str = "") -> dict:
@@ -553,7 +553,8 @@ def create_server(*, memory_db: str, memory_root: str,
 
             archive_result = None
             if history_db:
-                archive_result = conversation_backend.sync_when_notified(username, history_db)
+                archive_result = conversation_backend.sync_when_notified(username, history_db,
+                    **({"voice_model_path": voice_model_path} if voice_model_path else {}))
             saved_cursor = store.get_sync_cursor("reply_monitor", username)
             since_seq = int(saved_cursor or 0)
             update = conversation_backend.poll(username, since_seq, limit=200)
@@ -588,6 +589,7 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--memory-db", default="data/wechat_memory.sqlite3")
     parser.add_argument("--memory-root", default="data/memory")
     parser.add_argument("--history-db")
+    parser.add_argument("--voice-model-path", help="existing local model for ASR during archive writes")
     parser.add_argument("--moments-db")
     parser.add_argument("--profiles-db")
     parser.add_argument("--with-wechat-runtime", action="store_true",
@@ -605,7 +607,7 @@ def main(argv: list[str] | None = None) -> None:
         history_db=args.history_db, moments_db=args.moments_db,
         profiles_db=args.profiles_db,
         basic_skill=runtime.basic_skill if runtime else None,
-        conversation_backend=backend,
+        conversation_backend=backend, voice_model_path=args.voice_model_path,
     )
     try:
         server.run(transport="stdio")

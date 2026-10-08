@@ -1,57 +1,61 @@
 ---
 name: wechat-memory-rebuild
-description: Rebuild only affected WeChat memories after incompatible templates, backfills, identity corrections, or damaged analysis while preserving prior versions.
+description: 依据原始证据重建受影响的微信记忆，默认保留历史；仅在用户明确要求时执行限定范围清理或全历史多 Agent 复核。
 ---
 
-# WeChat Memory Rebuild
+# 微信记忆重建
 
-Use rebuild for incompatible templates, large historical backfills, merge/split decisions, rejected foundational links, or corruption. Normal deltas use incremental analysis.
+适用于分析方法不兼容、历史补全范围较大、身份合并/拆分、基础关联被否定或资料损坏。普通增量变化走对应增量分析 Skill。事件摘要过于稀疏时同时阅读 [EVENT_ANALYSIS_STANDARD.md](references/EVENT_ANALYSIS_STANDARD.md)，回读受影响的原始对话回合、重建跨月连续性并核实后续执行。
 
-## Procedure
+执行前阅读 [ANALYSIS_QUALITY_STANDARD.md](references/ANALYSIS_QUALITY_STANDARD.md) 和 [MEMORY_STORAGE_CONTRACT.md](references/MEMORY_STORAGE_CONTRACT.md)。仅修改标题或扩写旧短摘要不构成证据重建；事件清单或关键词片段不等于完整语义分析。缺偏好/性格、日期未核实或主体归属错误时，必须回到来源修复。
 
-1. Record the rebuild reason, affected scope, current versions, schema/application versions, and evidence range.
-2. Traverse dependency edges to identify the minimal affected months, conversations, events, people, relationships, and charts.
-3. Recompute bottom-up from raw evidence references.
-4. Submit complete Markdown views with explicit parent versions and a new template/input fingerprint.
-5. Verify every previous full Markdown version remains readable before clearing dirty nodes.
+## 存储与执行步骤
 
-## Failure handling
+正文写入 `data/memory/` 的正式路径；候选和阅读进度只放 `data/work/analysis/{run_id}/`。显式配置时统一核验数据库和正文根目录，并登记 `data/analysis_sources.json`。历史版本由提交接口维护，不自行复制或覆盖。
 
-- Unsupported schema: stop before writes and run a documented migration.
-- Missing evidence: keep old current version, record the gap, and leave rebuild pending.
-- Mid-run failure: completed nodes remain versioned; resume remaining jobs idempotently.
-- Parent conflict: reload and recompute that node.
-- Validation failure: never promote the candidate current file.
+1. 记录重建原因、固定范围、当前成功正文、应用/schema 状态和证据范围。
+2. 沿真实依赖关系确认最小受影响范围：月份、会话、事件、人物、关系和图表。不要无差别全量重跑。
+3. 从原始证据按时间顺序重算。逐块细读受影响月份，核对人物维度及请求涉及的精确日期。旧 Claim 和摘要只能作为待验证候选，不是原始证据。
+4. 提交完整 Markdown，带上实际父版本和输入指纹所需信息；输入指纹由后端计算。
+5. 清除 dirty 状态前，确认所有旧完整 Markdown 仍可读；通过实际支持的 API 修正/失效错误 Claim，并检查旧关联是否真的修复。不能假设事件 upsert 自动移除旧关联。
+6. 按各自粒度重建：受影响私聊/群聊月份→会话事项/习惯→人物聚合（包括资料/朋友圈）。核对事实、偏好和行为例子；报告真实阅读覆盖、维度和未解问题。
+7. 保留不同场景差异。群成员身份变化只影响对应有效期和关联历史；新朋友圈无需使无关会话月份失效。
 
-## Version rules
+## 全量重建与失败处理
 
-Never rewrite raw archives, historical Markdown, or superseded claims/events. Schema migrations and semantic template revisions are separate version axes. Rollback selects a prior complete view; it does not erase later audit history.
+只有用户明确要求删除旧分析再全量重做时，才先列稳定范围和具体派生产物，保全原始输入、身份和用户修正，再按请求范围清理。此例外不适用于默认增量更新。
 
-## Shared UI and recipient contract
+用户要求全历史最终报告时，列出固定来源的全部月份，明确分片阅读者和独立复核者；所有来源成功后由主模型综合并生成图文 HTML。不能交付若干月份阶段页冒充最终报告。用量不足时保存真实续读位置，不自行更换模型或扩大调度权限。
 
-Before UI navigation, recipient selection, removal auditing, or reply dispatch, read
-[UI_WORKFLOW_RULES.md](../../docs/UI_WORKFLOW_RULES.md). Use its search-state table,
-stable-identity checks, missing/removal distinctions, and failure stop conditions.
-Read [UI_PAGE_CATALOG.md](../../docs/UI_PAGE_CATALOG.md) for page descriptions and
-[ACTION_VERIFICATION_MATRIX.md](../../docs/ACTION_VERIFICATION_MATRIX.md) for verification requirements.
-These references must accompany the repository skill; missing references stop UI work.
-Offline-only analysis does not require screenshots or UI actions. Static rules never
-certify a live recipient; the complete stable-identity send workflow remains WA-005.
+- schema 不受支持：停止写入，先执行有记录的迁移。
+- 证据缺失：保留旧当前正文，记录缺口并保持重建待处理。
+- 中途失败：保留已经成功提交的节点，后续幂等续做。
+- 父版本冲突：重新加载该节点并重算。
+- 验收失败：不提升候选为当前正文。
+- 相同证据但分析方法有纠正：重新分析，不能把旧输入的无变化结果当作修复已完成。
 
-## 数据更新与 Skill 联动
+默认不得改写原始归档；保留历史 Markdown、被替代 Claim/Event、来源、身份和用户修正。只有明确删除分析正文的请求，才允许按正式契约清理限定的派生数据；正常回滚选择一个旧的完整视图，不删除后续审计历史。
 
-执行前读取共用的
-[数据新鲜度与联动规则](../../docs/SKILL_DATA_WORKFLOW.md)，先确定历史快照、当前
-状态、回复或 UI 模式。联动由当前 Agent 读取相关 SKILL.md 并执行其工具流程，
-不是自动派生代理、创建定时任务或扩大授权。
+## 数据联动与交接
 
-固定历史重建使用指定证据范围；要重建“当前”状态时先联动
-[wechat-sync](../wechat-sync/SKILL.md)。身份修正先由
-[wechat-identity-audit](../wechat-identity-audit/SKILL.md) 完成确认。
-按受影响依赖依次联动 [wechat-monthly-analysis](../wechat-monthly-analysis/SKILL.md)、
-[wechat-conversation-summary](../wechat-conversation-summary/SKILL.md)、
-[wechat-person-analysis](../wechat-person-analysis/SKILL.md)、
-[wechat-timeline](../wechat-timeline/SKILL.md)，成功后再交给
-[wechat-dashboard](../wechat-dashboard/SKILL.md)。正常新消息不默认完整重建。
-交接原因、范围、来源水位与旧/新完整版本。某节点失败保留其上一成功版本，
-已完成节点不重跑，不提前声称所有 dirty 节点已经清除。
+执行前阅读[数据新鲜度与联动规则](references/SKILL_DATA_WORKFLOW.md)。固定历史重建使用指定范围；重建当前状态时先按需联动 wechat-sync。身份修正由 wechat-identity-audit 确认。
+
+按受影响依赖依次联动 wechat-monthly-analysis、wechat-conversation-summary、wechat-person-analysis 和 wechat-timeline，成功后再交给 wechat-dashboard。普通新消息不触发完整重建。
+
+交接重建原因、固定范围、来源覆盖、水位、旧/新成功正文和未解决问题。某节点失败时保留其上一成功正文；不重复运行已完成节点，也不提前声称全部 dirty 节点已清除。
+
+## 分片、主体复核与全面交付
+
+只有用户明确授权全历史多 Agent 阅读时，才按[分析质量标准](references/ANALYSIS_QUALITY_STANDARD.md)的动态分片、独立月份阅读和主体/关系复核要求执行，使用[共享分片交接格式](references/monthly-handoff.md)。按真实消息跨度、记录数和可读字符量规划；各 Agent 只产出候选，协调者串行提交。
+
+分别核对 `speaker`、`actor`、`fact_owner`、`relation_owner` 和提及/引用的第三方，保留双方社会关系，第三方事实不能归给讲述人。下游是完整月度→会话→人物/关系→详细 HTML。覆盖不全、主体不明、缺少独立复核或上游未成功时停止完整交付，保留候选和上一成功正文。
+
+## 语音遗漏的补齐重建
+
+旧分析未读取语音内容时，先补齐本地原音频和程序 ASR 文字，按原消息 ID、时间和方向接回前后对话。再重读受影响月份并审核主体、关键日期和约定，依次更新会话、双方人物/关系及 HTML。现有转写未变的月份不重复识别；仅修改模板号或重新渲染 HTML 不能算补齐语音分析。全量请求保留全部月份的真实语音处理与阅读覆盖，参照本目录分析质量标准。
+
+## 随包资源范围
+
+执行规则、参考文档与模板只读取本 Skill 目录中的 `references/`、`assets/` 和已提供的 `scripts/`，相对路径从本 Skill 目录解析。不能跨目录借用另一个 Skill 的参考资源；缺少必需随包资源时报告缺失，维护时补齐本目录副本。其他 Skill 名称仅表示流程职责与上下游，不代替本目录资源。项目运行接口、正式数据路径与项目命令是运行依赖，不是外部指令来源；不为打包复制私人数据。
+
+全历史综合时读取本目录的[全历史综合要求](references/full-history-synthesis.md)，并执行本目录质量标准中的主题归纳、性格时间链与四类主题详细总结验收。

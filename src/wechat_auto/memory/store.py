@@ -929,13 +929,17 @@ class MemoryStore:
         """, (_now(), limit)).fetchall()
         return [dict(row) for row in rows]
 
-    def claim_next_job(self, *, worker_id: str = "agent") -> dict | None:
+    def claim_next_job(self, *, worker_id: str = "agent",
+                       job_id: str | None = None) -> dict | None:
+        """Claim the next job, or only the specified pending job when supplied."""
         now = _now()
+        selector = " AND job_id=?" if job_id is not None else ""
+        parameters = (now, job_id) if job_id is not None else (now,)
         with self._connection:
             row = self._connection.execute("""
                 SELECT * FROM analysis_jobs WHERE status='pending' AND available_at<=?
-                ORDER BY priority DESC,created_at LIMIT 1
-            """, (now,)).fetchone()
+            """ + selector + " ORDER BY priority DESC,created_at LIMIT 1",
+                parameters).fetchone()
             if row is None:
                 return None
             changed = self._connection.execute("""

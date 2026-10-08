@@ -31,7 +31,7 @@ PAGES = (
     PageSpec(PageId.MAIN_EMPTY, "main_without_selected_chat", "主界面未选会话", "base", ""),
     PageSpec(PageId.CHAT, "chat", "聊天", "base", "", verification="dark_main_captured"),
     PageSpec(PageId.GROUP_CHAT, "group_chat", "群聊", "base", "chat"),
-    PageSpec(PageId.SEARCH, "search", "本地搜索结果", "panel", "", (("联系人", "群聊"), ("聊天记录", "搜索结果", "服务号", "功能", "最近使用过的小程序")), "window"),
+    PageSpec(PageId.SEARCH, "search", "本地搜索结果", "panel", "", (("联系人", "群聊", "功能"), ("聊天记录", "搜索结果", "服务号", "功能", "最近使用过的小程序")), "window"),
     PageSpec(PageId.CHAT_HISTORY, "chat_history", "聊天记录检索", "panel", "chat", (("聊天记录",), ("全部", "图片与视频", "文件", "日期"))),
     PageSpec(PageId.MESSAGE_MENU, "message_menu", "消息右键菜单", "overlay", "chat", (("复制",), ("引用", "转发", "多选")), "window"),
     PageSpec(PageId.EMOJI_PANEL, "emoji_panel", "表情面板", "panel", "chat"),

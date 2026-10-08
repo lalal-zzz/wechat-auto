@@ -136,3 +136,27 @@ def test_identity_merge_requires_candidate_decision_and_preserves_alias(tmp_path
             "SELECT person_id FROM person_aliases WHERE alias_value='旧昵称'"
         ).fetchone()
         assert alias[0] == left
+
+
+def test_exact_job_claim_does_not_take_unrelated_high_priority_job(tmp_path):
+    path = tmp_path / "memory.sqlite3"
+    with MemoryStore(path) as store, MemoryStore(path) as other_worker:
+        unrelated = store.enqueue_job("monthly_analysis", "conversation", "other",
+                                      period="2026-08", priority=100)
+        selected = store.enqueue_job("monthly_analysis", "conversation", "selected",
+                                     period="2024-06", priority=1)
+        assert store.claim_next_job(job_id="missing") is None
+        claimed = store.claim_next_job(job_id=selected, worker_id="selected-worker")
+        assert claimed["job_id"] == selected and claimed["status"] == "running"
+        assert other_worker.claim_next_job(job_id=selected) is None
+        assert [job["job_id"] for job in store.next_jobs()] == [unrelated]
+        assert other_worker.claim_next_job()["job_id"] == unrelated
+
+
+def test_exact_job_claim_respects_future_availability(tmp_path):
+    with MemoryStore(tmp_path / "memory.sqlite3") as store:
+        selected = store.enqueue_job("monthly_analysis", "conversation", "selected")
+        with store.transaction() as connection:
+            connection.execute("UPDATE analysis_jobs SET available_at=? WHERE job_id=?",
+                               ("9999-01-01T00:00:00+00:00", selected))
+        assert store.claim_next_job(job_id=selected) is None

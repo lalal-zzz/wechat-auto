@@ -2,15 +2,19 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
+import sqlite3
+import hashlib
+from pathlib import Path
 
 from wechat_auto.memory.markdown import MarkdownMemory
 from wechat_auto.memory.store import MemoryStore
 
 
 class AnalysisService:
-    def __init__(self, store: MemoryStore, markdown: MarkdownMemory):
+    def __init__(self, store: MemoryStore, markdown: MarkdownMemory, history_path=None):
         self.store = store
         self.markdown = markdown
+        self.history_path = Path(history_path).resolve() if history_path else None
 
     def submit(self, *, scope_type: str, scope_id: str, markdown: str,
                evidence_ids: Iterable[str], template_version: str,
@@ -22,6 +26,13 @@ class AnalysisService:
         fingerprint = self.store.input_fingerprint(
             scope_type, scope_id, period, evidence, template_version, correction_ids
         )
+        if self.history_path and self.history_path.is_file():
+            with sqlite3.connect(self.history_path.as_uri()+"?mode=ro",uri=True) as db:
+                if db.execute("SELECT 1 FROM sqlite_master WHERE name='voice_transcriptions' AND type='table'").fetchone():
+                    ids = set(evidence)
+                    revisions = [tuple(row) for row in db.execute("SELECT message_id,version,text,engine,audio_sha256 FROM voice_transcriptions") if row[0] in ids]
+                    if revisions:
+                        fingerprint = hashlib.sha256((fingerprint+repr(sorted(revisions))).encode("utf-8")).hexdigest()
         current = self.store.current_version(scope_type, scope_id, period)
         parent = int(current["version"]) if current else 0
         if expected_parent is not None and parent != expected_parent:

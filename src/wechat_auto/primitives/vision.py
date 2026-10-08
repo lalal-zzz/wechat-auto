@@ -448,19 +448,23 @@ class VisionAutomation:
 
     def recognize_image(self, img: Image.Image, *,
                         region: tuple[int, int, int, int] | None = None,
-                        window_size: tuple[int, int] | None = None) -> list[dict]:
+                        window_size: tuple[int, int] | None = None,
+                        upscale: int = 1) -> list[dict]:
         """Recognize a single captured frame; infrastructure errors are explicit."""
         ox = region[0] if region else 0
         oy = region[1] if region else 0
         import numpy as np
 
-        result, _ = self._ocr(np.array(img.convert("RGB")))
+        if upscale not in (1, 2, 3):
+            raise ValueError('OCR upscale must be 1, 2 or 3')
+        source = img if upscale == 1 else img.resize((img.width*upscale,img.height*upscale))
+        result, _ = self._ocr(np.array(source.convert("RGB")))
         boxes: list[dict] = []
         for item in result or []:
             try:
                 quad, text, score = item[0], item[1], item[2]
-                xs = [int(p[0]) for p in quad]
-                ys = [int(p[1]) for p in quad]
+                xs = [round(p[0] / upscale) for p in quad]
+                ys = [round(p[1] / upscale) for p in quad]
                 boxes.append({
                     "text": str(text),
                     "x": min(xs) + ox, "y": min(ys) + oy,
@@ -480,23 +484,36 @@ class VisionAutomation:
                 ]
         return boxes
 
-    def observe_page(self, *, include_ocr: bool = True) -> dict:
+    def observe_page(self, *, include_ocr: bool = True, visible: bool = False) -> dict:
         """Return composable page states and OCR from the same HWND frame."""
         from wechat_auto.primitives.page_geometry import observe_geometry
         from wechat_auto.primitives.page_state import classify_page
 
-        image = self.capture()
+        if visible:
+            from wechat_auto.utils.screenshot import ScreenshotHelper
+
+            image = ScreenshotHelper().capture_visible_window(self._app.handle)
+        else:
+            image = self.capture()
         if image is None:
             return {"ok": False, "error": "window_capture_unavailable"}
+        self._last_observed_image = image
         try:
             boxes = self.recognize_image(image) if include_ocr else []
         except Exception as exc:
             return {"ok": False, "error": "ocr_infrastructure_failure",
                     "error_type": type(exc).__name__}
-        from wechat_auto.primitives.page_controls import observe_selected_contacts, observe_tab_closes
+        from wechat_auto.primitives.page_controls import (
+            observe_emoji_panel,
+            observe_empty_chat,
+            observe_selected_contacts,
+            observe_tab_closes,
+        )
 
         state = classify_page(boxes, image.size, geometry=observe_geometry(image))
+        observe_emoji_panel(image,boxes,state)
         observe_selected_contacts(image, state)
+        observe_empty_chat(image, state)
         observe_tab_closes(image, boxes, state)
         if state['page'] in {'contacts', 'contact_profile', 'new_friends'}:
             from wechat_auto.primitives.contact_section import observe_contact_section
@@ -505,7 +522,9 @@ class VisionAutomation:
                   "boxes": boxes, "state": state}
         from wechat_auto.actions.pages import page_keys
         if 'moments_person' in page_keys(state):
-            from wechat_auto.primitives.moments_observation import observe_album_sections
+            from wechat_auto.primitives.moments_observation import (
+                observe_album_sections,
+            )
             result['album_observation'] = observe_album_sections(image, boxes, state)
         return result
 

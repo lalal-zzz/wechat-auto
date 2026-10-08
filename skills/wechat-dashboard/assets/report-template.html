@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'">
+  <title>{{DOCUMENT_TITLE}}</title>
+  <style>{{INLINE_CSS}}</style>
+</head>
+<body>
+  <div class="reading-progress" aria-hidden="true"><span></span></div>
+  <header>
+    <div class="hero-copy">
+      <span class="eyebrow">关系档案　/　FULL HISTORY</span>
+      <h1>{{SCOPE_DISPLAY_NAME}}</h1>
+      <div class="hero-subtitle">聊天关系全景报告</div>
+      <div class="hero-meta">
+        <span>{{ICON_CALENDAR}}{{MONTH_COUNT}} 个月度记录</span>
+        <span>{{ICON_BOOK}}完整正文可展开</span>
+        <span>{{ICON_SPARK}}{{GENERATED_AT}}</span>
+      </div>
+      <p>{{REPORT_NOTE}}</p>
+    </div>
+    <svg class="hero-art" viewBox="0 0 420 220" aria-hidden="true">
+      <path class="art-thread" d="M50 150C105 40 185 200 246 94s95 34 130-20"/>
+      <circle class="art-node" cx="50" cy="150" r="8"/><circle class="art-node" cx="246" cy="94" r="8"/>
+      <circle class="art-node" cx="376" cy="74" r="8"/>
+      <rect class="art-bubble bubble-a" x="38" y="24" width="134" height="74" rx="19"/>
+      <path class="art-line" d="M59 50h91M59 68h61"/>
+      <rect class="art-bubble bubble-b" x="224" y="124" width="150" height="70" rx="19"/>
+      <path class="art-line" d="M246 149h103M246 168h72"/>
+      <circle class="art-orbit" cx="355" cy="40" r="18"/>
+      <path class="art-spark" d="m355 30 3 7 7 3-7 3-3 7-3-7-7-3 7-3 3-7Z"/>
+    </svg>
+  </header>
+
+  <div class="reader-tools">
+    <label class="searchbox" for="search">
+      {{ICON_SEARCH}}
+      <input id="search" type="search" placeholder="搜索人物、事件、喜好…">
+      <span class="search-hint">全文</span>
+    </label>
+    <span id="result" role="status"></span>
+    <button id="reset">{{ICON_CLOSE}}清除</button>
+    <button id="toggle-months">{{ICON_LAYERS}}展开全部月份</button>
+    <button onclick="window.print()">{{ICON_PRINT}}打印 / PDF</button>
+  </div>
+
+  <div class="layout">
+    <aside>
+      <details id="contents">
+        <summary>目录与跳转</summary>
+        <nav>{{TABLE_OF_CONTENTS}}</nav>
+      </details>
+    </aside>
+    <main>
+      <section class="report overview">
+        <div class="overview-kicker">阅读地图</div>
+        <h2>先看综合，再按需展开月报</h2>
+        <p>跨月总结和图解集中在前面；每月完整记录保留在下方，点击月份即可阅读。搜索会自动打开相关月份。</p>
+        <div class="overview-stats">
+          <span>{{ICON_CALENDAR}}<strong>{{MONTH_COUNT_PADDED}}</strong><small>个月份</small></span>
+          <span>{{ICON_BOOK}}<strong>{{INTEGRATED_COUNT}}</strong><small>份综合分析</small></span>
+          <span>{{ICON_CHART}}<strong>{{COVERAGE_LABEL}}</strong><small>历史范围</small></span>
+        </div>
+        <details class="month-index">
+          <summary>月份索引　·　{{MONTH_COUNT}} 个月</summary>
+          <div class="year-index-list">{{YEAR_MONTH_INDEX}}</div>
+        </details>
+      </section>
+
+      {{VISUAL_REPORT}}
+      {{PERIOD_EXPLORER}}
+      {{INTEGRATED_REPORTS}}
+      {{YEARLY_MONTH_REPORTS}}
+    </main>
+  </div>
+  <button class="back-to-top" type="button" aria-label="回到顶部">↑</button>
+  <script>{{INLINE_JS}}</script>
+</body>
+</html>

@@ -5,6 +5,16 @@ import hashlib
 import re
 
 
+def parse_album_visibility_hint(text: str) -> tuple[str, str]:
+    """Parse only an explicit album visibility footer, never infer access."""
+    text = re.sub(r'\s+', '', text)
+    periods = {'三天': 'three_days', '3天': 'three_days', '一个月': 'one_month',
+               '1个月': 'one_month', '半年': 'six_months', '六个月': 'six_months', '6个月': 'six_months'}
+    match = re.fullmatch(r'(?:朋友|对方)?(?:仅展示|只展示|仅显示|只显示|仅可查看|仅可见|只可见)'
+                         r'(?:最近|近)?(三天|3天|一个月|1个月|半年|六个月|6个月)(?:的)?(?:朋友圈|动态)?', text)
+    return (periods[match[1]], text) if match else ('unknown', '')
+
+
 def has_calendar_rows(texts: list[str]) -> bool:
     """Recognize calendar layout, without assigning publication dates."""
     joined = any(re.fullmatch(r'(?:0[1-9]|[12]\d|3[01])(?:0?[1-9]|1[0-2])月', t) for t in texts)
@@ -29,14 +39,10 @@ def observe_album_sections(image, boxes: list[dict], state: dict) -> dict:
     pinned = '置顶' in dates
     calendar = has_calendar_rows(dates)
     window, hint = 'unknown', ''
-    periods = {'三天': 'three_days', '3天': 'three_days', '一个月': 'one_month',
-               '1个月': 'one_month', '半年': 'six_months', '六个月': 'six_months', '6个月': 'six_months'}
     for b in scoped:
-        t = re.sub(r'\s+', '', b['text'])
-        match = re.fullmatch(r'(?:朋友|对方)?(?:仅展示|只展示|仅显示|只显示|仅可查看|仅可见|只可见)'
-                             r'(?:最近|近)?(三天|3天|一个月|1个月|半年|六个月|6个月)(?:的)?(?:朋友圈|动态)?', t)
-        if match:
-            window, hint = periods[match[1]], t
+        period, footer = parse_album_visibility_hint(b['text'])
+        if footer:
+            window, hint = period, footer
     sections = [
         {'section': 'pinned', 'status': 'observed' if pinned else 'unknown',
          'visibility_window': 'unknown', 'visibility_hint': ''},

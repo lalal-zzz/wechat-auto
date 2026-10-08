@@ -63,3 +63,21 @@ def test_personal_album_right_tab_preserves_central_profile_and_identity_boundar
                   profile + [tab, box('置顶', 400, 500)]):
         state = classify_page(items, (1000, 800), geometry=geometry)
         assert not any(p['key'] == 'moments_person' for p in state['panels'])
+
+
+def test_scrolled_album_without_heading_requires_calendar_year_and_explicit_footer():
+    items = [box('2026年', 24, 90), box('155月', 35, 295), box('254月', 35, 495),
+             box('朋友仅展示最近半年的朋友圈', 190, 760)]
+    state = classify_page(items, (660, 837))
+    assert state['page'] == 'moments_person'
+    assert state['page_candidates'][0]['verification'] == 'calendar_year_and_explicit_visibility_footer'
+    assert state['action_authorized'] is False
+    for missing in range(len(items)):
+        reduced = [item for i, item in enumerate(items) if i != missing]
+        if missing in (0, 3):
+            assert classify_page(reduced, (660, 837))['page'] == 'unknown'
+    assert classify_page([*items, box('发送', 550, 800)], (660, 837))['page'] != 'moments_person'
+    assert classify_page(items, (660, 837), geometry={
+        'composer_candidates': [{'window_fraction': [.25, .7, .7, .25]}]})['page'] != 'moments_person'
+    moved = [{**item, 'x': 280} if i in (1, 2) else item for i, item in enumerate(items)]
+    assert classify_page(moved, (660, 837))['page'] == 'unknown'

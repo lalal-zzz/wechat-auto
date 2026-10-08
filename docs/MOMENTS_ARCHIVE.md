@@ -46,3 +46,7 @@ python scripts\download_moments_item.py --manifest <manifest> --item-id <item_id
 
 一次文件下载成功不等于全部联系人完整历史已归档。UI 加载、内容入库和媒体
 落库分别记录覆盖状态。全量资料刷新不替代逐项远程下载确认。
+
+个人相册的置顶与普通动态分别记录覆盖观察，详见
+[CONTACT_COLLECTION.md](CONTACT_COLLECTION.md#置顶与普通动态)。普通动态的期限不能
+套用到置顶；较早的置顶不能证明普通历史完整。缓存无逐条区域证据时，置顶属性保持未知。

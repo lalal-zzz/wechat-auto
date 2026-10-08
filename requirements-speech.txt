@@ -1,0 +1,10 @@
+# Optional offline voice transcription; models must be provisioned locally.
+faster-whisper>=1.1,<2
+pilk>=0.2,<1
+
+# faster-whisper 1.2 uses metadata_errors, removed by PyAV 19.
+av>=11,<19
+
+# Core package imports used by the standalone archive CLI.
+pyperclip>=1.9,<2
+Pillow>=10,<13

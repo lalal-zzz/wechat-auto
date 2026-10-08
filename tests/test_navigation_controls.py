@@ -3,7 +3,41 @@ import pytest
 from PIL import Image
 
 from wechat_auto.primitives.navigation_templates import TEMPLATES
-from wechat_auto.primitives.page_controls import find_navigation_control, observe_selected_contacts
+from wechat_auto.primitives.page_controls import (
+    NavigationControlError,
+    find_navigation_control,
+    observe_empty_chat,
+    observe_selected_contacts,
+)
+
+
+@pytest.mark.parametrize('scale,light', [(1, False), (.75, True), (1.5, False)])
+def test_empty_chat_requires_selected_glyph_and_unique_public_logo(scale, light):
+    from wechat_auto.primitives.empty_chat_logo import EMPTY_CHAT_LOGO
+
+    background = 240 if light else 30
+    image = Image.new('RGB', (1000, 800), (background,)*3)
+    image.paste((210,)*3 if light else (65,)*3, (100, 0, 300, 800))
+    glyph = Image.fromarray(np.array([[255 if v == '1' else 0 for v in row]
+                                     for row in TEMPLATES['open_chats']], dtype=np.uint8))
+    image.paste((0, 180, 100), (35, 150), glyph)
+    logo = Image.fromarray(np.array([[255 if v == '1' else 0 for v in row]
+                                    for row in EMPTY_CHAT_LOGO], dtype=np.uint8))
+    image.paste((background-25,)*3 if light else (background+25,)*3, (600, 350), logo)
+    image = image.resize((round(1000*scale), round(800*scale)), Image.Resampling.NEAREST)
+    def state():
+        return {'page':'unknown', 'composer':{}, 'region_bounds':{'conversation_header':[.3]}}
+    observed = state()
+    observe_empty_chat(image, observed)
+    assert observed['page'] == 'main_without_selected_chat'
+    assert observed['selected_navigation']['verification'] == 'selected_chat_glyph_and_empty_logo'
+    blocked = state(); blocked['composer']['geometry_candidates'] = [{}]
+    observe_empty_chat(image, blocked)
+    assert blocked['page'] == 'unknown'
+    image.paste((background,)*3, (round(600*scale),round(350*scale),round(730*scale),round(460*scale)))
+    missing = state()
+    observe_empty_chat(image, missing)
+    assert missing['page'] == 'unknown'
 
 
 def sidebar(size, *, position=(42, 300), scale=1, light=False, duplicate=False):
@@ -49,6 +83,34 @@ def test_missing_duplicate_and_unimplemented_controls_do_not_supply_coordinates(
         find_navigation_control(image, 'open_contacts')
     with pytest.raises(RuntimeError, match='not implemented'):
         find_navigation_control(image, 'open_contact_more')
+
+
+@pytest.mark.parametrize('operation', ['open_chats', 'open_discover'])
+def test_similar_sidebar_silhouettes_require_a_strong_distinct_winner(operation):
+    image = Image.new('RGB', (1000, 800), (65, 65, 65))
+    image.paste((35, 35, 35), (0, 0, 100, 800))
+    positions = {'open_chats': (35, 150), 'open_discover': (35, 330)}
+    for name, position in positions.items():
+        glyph = Image.fromarray(np.array([[255 if v == '1' else 0 for v in row]
+                                         for row in TEMPLATES[name]], dtype=np.uint8))
+        image.paste((150, 150, 150), position, glyph)
+    control = find_navigation_control(image, operation)
+    assert abs(control['y'] - (positions[operation][1] + len(TEMPLATES[operation])/2)) <= 2
+    glyph = Image.fromarray(np.array([[255 if v == '1' else 0 for v in row]
+                                     for row in TEMPLATES[operation]], dtype=np.uint8))
+    image.paste((150, 150, 150), (35, 500), glyph)
+    with pytest.raises(NavigationControlError, match='ambiguous'):
+        find_navigation_control(image, operation)
+
+
+def test_a_compass_cross_match_cannot_substitute_for_the_absent_chat_icon():
+    image = Image.new('RGB', (1000, 800), (65, 65, 65))
+    image.paste((35, 35, 35), (0, 0, 100, 800))
+    glyph = Image.fromarray(np.array([[255 if v == '1' else 0 for v in row]
+                                     for row in TEMPLATES['open_discover']], dtype=np.uint8))
+    image.paste((150, 150, 150), (35, 300), glyph)
+    with pytest.raises(NavigationControlError, match='absent or ambiguous'):
+        find_navigation_control(image, 'open_chats')
 
 
 def test_selected_contacts_glyph_observes_page_without_tree_headers():

@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; connect-src 'none'; base-uri 'none'; form-action 'none'">
+  <meta name="color-scheme" content="light">
+  <title>$page_title</title>
+  <style>$style</style>
+</head>
+<body>
+  <a class="skip-link" href="#content">跳到主要内容</a>
+  <div class="layout">
+    <aside class="sidebar" aria-label="页面导航">
+      <a class="brand" href="#overview">
+        <span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 32 32" fill="none"><path d="M7 6h12a6 6 0 0 1 6 6v14H13a6 6 0 0 1-6-6V6Z" fill="currentColor" opacity=".28"/><path d="M7 6v20m6-14h8m-8 5h8m-8 5h5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></span>
+        <span>记忆与变化<small>一份慢慢生长的聊天档案</small></span>
+      </a>
+      <div class="sidebar-label">这份档案</div>
+      <nav>
+        <a href="#overview"><span aria-hidden="true">◌</span> 对象概览</a>
+        <a href="#content"><span aria-hidden="true">▤</span> 内容与特征</a>
+        <a href="#timeline"><span aria-hidden="true">◷</span> 事情进展</a>
+        <a href="#sources"><span aria-hidden="true">▧</span> 来源与范围</a>
+        <a href="#reports"><span aria-hidden="true">▱</span> 详细分析</a>
+      </nav>
+      <div class="sidebar-foot"><span class="offline-dot" aria-hidden="true"></span> 保存在本机，离线可读</div>
+    </aside>
+    <main>
+      <div class="topline"><span>微信聊天档案</span><span id="generated-short" class="muted"></span></div>
+      <section id="overview" class="hero" aria-labelledby="page-heading">
+        <div class="hero-copy">
+          <div class="eyebrow" id="scope-kind">对象概览</div>
+          <h1 id="page-heading">记忆与变化</h1>
+          <p id="scope-description" class="hero-description">从对话中的具体事情，读懂表达、偏好和变化。</p>
+          <div class="hero-tags"><span class="pill" id="scope-tag">本地档案</span><span class="pill" id="analysis-tag">等待分析</span></div>
+        </div>
+        <div class="hero-art" aria-hidden="true"><div class="art-orbit"></div><div class="art-book"><span></span><span></span><span></span></div><div class="art-leaf"></div><div class="art-note"></div></div>
+      </section>
+      <aside id="quality-notice" class="quality-notice" aria-label="分析状态"><span class="notice-icon" aria-hidden="true">i</span><div><strong id="quality-title">分析状态</strong><p id="quality-description"></p></div></aside>
+      <section class="metrics" aria-label="档案概况">
+        <div class="metric"><span class="metric-label">已保存结论</span><strong id="claim-count">0</strong><small>事实、偏好与表达</small></div>
+        <div class="metric"><span class="metric-label">已保存事件</span><strong id="event-count">0</strong><small>具体事情与阶段</small></div>
+        <div class="metric"><span class="metric-label">正式分析版本</span><strong id="version-count">0</strong><small>本范围当前成功版本</small></div>
+        <div class="metric"><span class="metric-label">关联会话</span><strong id="conversation-count">0</strong><small>按稳定身份关联</small></div>
+      </section>
+      <section class="filter-panel" aria-labelledby="filter-heading">
+        <h2 id="filter-heading" class="visually-hidden">筛选内容</h2>
+        <label class="search-field" for="query"><span aria-hidden="true">⌕</span><input id="query" type="search" placeholder="搜索具体事情、偏好或表达…" autocomplete="off"><span class="visually-hidden">搜索结论与事件</span></label>
+        <label class="select-field" for="status">依据<select id="status"><option value="">全部依据</option><option value="confirmed">用户已确认</option><option value="observed">有直接记录</option><option value="inferred">分析推断</option><option value="unknown">尚不确定</option><option value="other">其他状态</option></select></label>
+        <button id="reset-filters" class="text-button" type="button">重置</button>
+        <p id="filter-result" class="filter-result" role="status" aria-live="polite"></p>
+      </section>
+      <div class="reading-grid">
+        <div class="primary-column">
+          <section id="content" class="panel" aria-labelledby="content-heading">
+            <div class="section-heading"><div><span class="eyebrow">对话里的细节</span><h2 id="content-heading">内容与特征</h2></div><span class="section-count" id="visible-claim-count"></span></div>
+            <p class="section-intro">保留具体场景与适用时间，区分直接记录和分析推断。</p>
+            <div id="dimensions" class="dimension-filters" role="group" aria-label="按内容维度筛选"></div>
+            <div id="claims"></div>
+          </section>
+          <section id="timeline" class="panel" aria-labelledby="timeline-heading">
+            <div class="section-heading"><div><span class="eyebrow">时间里的线索</span><h2 id="timeline-heading">事情进展</h2></div><label class="sort-label" for="event-order"><span class="visually-hidden">事件顺序</span><select id="event-order"><option value="desc">最近在前</option><option value="asc">从早到晚</option></select></label></div>
+            <p class="section-intro">以有记录的日期排列；没有记录的间隔不代表事情持续发生。</p>
+            <div id="events"></div>
+          </section>
+        </div>
+        <aside class="secondary-column">
+          <section id="sources" class="panel source-panel" aria-labelledby="sources-heading">
+            <div class="section-heading"><div><span class="eyebrow">理解这份档案</span><h2 id="sources-heading">来源与范围</h2></div></div>
+            <div id="source-status"></div>
+            <p class="small-note">索引、水位和版本记录分别说明来源与处理进度，无法替代完整语义阅读验收。</p>
+            <details class="technical-details"><summary>查看覆盖与版本详情</summary><div id="technical-metadata"></div></details>
+          </section>
+          <section id="reports" class="panel report-panel" aria-labelledby="reports-heading">
+            <span class="eyebrow">需要更多细节时</span><h2 id="reports-heading">详细分析</h2>
+            <p class="section-intro">打开本机保存的完整正文，查看背景、过程、依据与反例。</p>
+            <div id="report-links"></div>
+            <p class="small-note">正文链接指向生成时核验的正式版本。未验收候选不会出现在这里。</p>
+          </section>
+          <section class="reading-note"><span class="eyebrow">阅读提示</span><h3>给变化留一点空间</h3><p>一次表达只属于当时的语境。看见长期模式，也保留例外、反证和仍不确定的部分。</p><div class="legend"><span class="status-badge confirmed">用户已确认</span><span class="status-badge observed">有直接记录</span><span class="status-badge inferred">分析推断</span></div></section>
+        </aside>
+      </div>
+      <footer><span>记忆与变化 · 本地聊天档案</span><span id="generated-full"></span></footer>
+    </main>
+  </div>
+  <noscript><div class="noscript-notice">请允许本地页面运行 JavaScript，以查看内嵌的离线分析。页面不访问网络。</div></noscript>
+  <script id="memory-data" type="application/json">$payload</script>
+  <script>$script</script>
+</body>
+</html>

@@ -39,7 +39,13 @@ def make_message_fingerprint(chat: object, message_time: object, content: object
 
 
 class HistoryStore:
-    def __init__(self, path: str | Path):
+    def __init__(self, path: str | Path, *, voice_model_path: str | Path | None = None,
+                 voice_device: str = "auto"):
+        self.voice_model_path = Path(voice_model_path).resolve() if voice_model_path else None
+        self.voice_device = voice_device
+        self.last_voice_processing = []
+        if self.voice_model_path and not self.voice_model_path.is_dir():
+            raise ValueError("local voice model directory does not exist")
         self.path = Path(path).expanduser().resolve()
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._connection = sqlite3.connect(self.path)
@@ -173,7 +179,20 @@ class HistoryStore:
                 INSERT INTO message_media(id,message_id,chat,kind,mime_type,original_ref,local_name,size,sha256,data)
                 VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO NOTHING
             """, media_rows)
-        return self._connection.total_changes - before
+        added = self._connection.total_changes - before
+        self.last_voice_processing = []
+        if self.voice_model_path:
+            from wechat_auto.storage.voice_transcription import VoiceTranscriptions
+            processor = VoiceTranscriptions(self)
+            by_chat = {}
+            for row in rows:
+                if str(json.loads(row[7]).get("type")) in {"语音", "34"}:
+                    by_chat.setdefault(row[1], set()).add(message_id_map.get(row[0], row[0]))
+            for chat, ids in by_chat.items():
+                result = processor.transcribe_local(chat, self.voice_model_path,
+                    device=self.voice_device, message_ids=ids, limit=max(len(ids), 1))
+                self.last_voice_processing.append({"chat": chat, **result})
+        return added
 
     def save_snapshot(self, snapshot: dict) -> int:
         return self.save_messages(snapshot.get("messages", []))
@@ -203,7 +222,7 @@ class HistoryStore:
                     "raw": json.loads(row[7])}
             item["media"] = self.fetch_media(row[0])
             result.append(item)
-        return result
+        return self.with_transcriptions(result)
 
     def get_message(self, message_id: str) -> dict | None:
         """Fetch one explicitly requested evidence message by stable ID."""
@@ -213,9 +232,9 @@ class HistoryStore:
         """, (message_id,)).fetchone()
         if row is None:
             return None
-        return {"id": row[0], "chat": row[1], "sender": row[2], "content": row[3],
+        return self.with_transcriptions([{ "id": row[0], "chat": row[1], "sender": row[2], "content": row[3],
                 "time": row[4], "direction": row[5], "source": row[6],
-                "raw": json.loads(row[7]), "media": self.fetch_media(row[0])}
+                "raw": json.loads(row[7]), "media": self.fetch_media(row[0])}])[0]
 
     def fetch_month(self, chat: str, period: str, *, after_id: str = "",
                     limit: int = 5000) -> list[dict]:
@@ -242,9 +261,9 @@ class HistoryStore:
             SELECT id,chat,sender,content,message_time,direction,source,raw_json
             FROM messages WHERE {} ORDER BY rowid LIMIT ?
         """.format(" AND ".join(clauses)), params).fetchall()
-        return [{"id": row[0], "chat": row[1], "sender": row[2], "content": row[3],
+        return self.with_transcriptions([{"id": row[0], "chat": row[1], "sender": row[2], "content": row[3],
                  "time": row[4], "direction": row[5], "source": row[6],
-                 "raw": json.loads(row[7])} for row in rows]
+                 "raw": json.loads(row[7])} for row in rows])
 
     def fetch_media(self, message_id: str) -> list[dict]:
         rows = self._connection.execute("""
@@ -267,9 +286,19 @@ class HistoryStore:
         if index is None:
             return []
         selected = rows[max(0, index - before):index + after + 1]
-        return [{"id": row[1], "chat": row[2], "sender": row[3], "content": row[4],
+        return self.with_transcriptions([{"id": row[1], "chat": row[2], "sender": row[3], "content": row[4],
                  "time": row[5], "direction": row[6], "source": row[7],
-                 "raw": json.loads(row[8])} for row in selected]
+                 "raw": json.loads(row[8])} for row in selected])
+
+    def with_transcriptions(self, items: list[dict]) -> list[dict]:
+        """Attach derived text without overwriting original XML or loading audio."""
+        exists = self._connection.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='voice_transcriptions'").fetchone()
+        if exists:
+            for item in items:
+                row = self._connection.execute("SELECT version,text,engine,status,source_ref,audio_sha256 FROM voice_transcriptions WHERE message_id=? ORDER BY version DESC LIMIT 1", (item["id"],)).fetchone()
+                if row:
+                    item["transcription"] = dict(zip(("version","text","engine","status","source_ref","audio_sha256"),row))
+        return items
 
     def get_cursor(self, source: str, chat: str) -> int:
         row = self._connection.execute(

@@ -17,6 +17,11 @@ kernel32 = ctypes.windll.kernel32
 WNDENUMPROC = ctypes.WINFUNCTYPE(wt.BOOL, wt.HWND, wt.LPARAM)
 SW_RESTORE = 9
 SW_MINIMIZE = 6
+WS_CAPTION = 0x00C00000
+WS_THICKFRAME = 0x00040000
+WS_MINIMIZEBOX = 0x00020000
+WS_MAXIMIZEBOX = 0x00010000
+WS_SYSMENU = 0x00080000
 
 
 class Application:
@@ -187,28 +192,26 @@ class Application:
             raise RuntimeError("Window resize failed")
 
     def _find_wechat_main_hwnd(self) -> int | None:
-        found: list[tuple[int, int]] = []
+        found: list[int] = []
 
         def callback(hwnd, _lparam):
-            length = user32.GetWindowTextLengthW(hwnd)
-            title_buffer = ctypes.create_unicode_buffer(length + 1)
             class_buffer = ctypes.create_unicode_buffer(256)
-            user32.GetWindowTextW(hwnd, title_buffer, length + 1)
             user32.GetClassNameW(hwnd, class_buffer, 256)
             if class_buffer.value == self._config.wechat_class_name:
-                rect = wt.RECT()
-                user32.GetWindowRect(hwnd, ctypes.byref(rect))
-                area = max(0, rect.right - rect.left) * max(0, rect.bottom - rect.top)
-                # Weixin changes the top-level title to the active chat name.
-                # Class plus a normal-sized window is the stable identifier;
-                # the configured title remains accepted for splash/idle state.
-                if (title_buffer.value == self._config.wechat_title
-                        or area >= 500_000 or user32.IsIconic(hwnd)):
-                    found.append((int(hwnd), area))
+                # Weixin's custom main frame has a caption, a resize frame and
+                # minimize/maximize boxes, but no standard system menu. Albums
+                # share its Qt class and may be larger than a minimized main
+                # window; their native popup frame is a different window role.
+                style = int(user32.GetWindowLongW(hwnd, -16)) & 0xFFFFFFFF
+                frame = WS_CAPTION | WS_THICKFRAME | WS_MINIMIZEBOX | WS_MAXIMIZEBOX
+                if style & frame == frame and not style & WS_SYSMENU:
+                    found.append(int(hwnd))
             return True
 
         user32.EnumWindows(WNDENUMPROC(callback), 0)
-        return max(found, key=lambda item: item[1])[0] if found else None
+        if len(found) > 1:
+            raise WeChatNotRunningError('Multiple Weixin main windows; explicit selection required')
+        return found[0] if found else None
 
     def _wake_window(self, hwnd: int) -> bool:
         if not user32.IsWindow(hwnd):
