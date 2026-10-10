@@ -605,13 +605,15 @@ document.querySelectorAll('.integrated-report > .chapter').forEach((chapter,inde
   knownPeriods.forEach(period=>{const b=document.createElement('button');b.type='button';b.textContent=period;b.addEventListener('click',()=>openMonth(period));track.append(b);});map.append(track);tools.after(map);
  }
  let view=null;
- if(/兴趣|偏好|喜好|互动模式/.test(title))view='compare';
+ if(/性格|人格|MBTI|兴趣|偏好|喜好|互动模式/.test(title))view='compare';
  else if(/人际|关系网络|社会关系/.test(title))view='relationships';
  else if(/日期|相识|认识|工作|学习|学业|阶段|跨期变化/.test(title))view='timeline';
- const original=view&&document.querySelector('.graphic-report [data-panel="'+view+'"]');
+ const panels=view?[...document.querySelectorAll('.graphic-report [data-panel="'+view+'"]')]:[];
+ const personalityTopic=/性格|人格|MBTI/.test(title);
+ const original=panels.find(panel=>personalityTopic===/性格|人格|MBTI/.test(panel.querySelector('h3')?.textContent||''))||panels[0];
  if(original){
   const graphic=document.createElement('details');graphic.className='topic-graphic';
-  const summary=document.createElement('summary');summary.textContent='展开全历史'+({compare:'偏好对照',relationships:'人际关系图',timeline:'时间图'})[view]+'，与本节对照';graphic.append(summary);
+  const summary=document.createElement('summary');summary.textContent='展开全历史'+(personalityTopic?'性格画像':({compare:'偏好对照',relationships:'人际关系图',timeline:'时间图'})[view])+'，与本节对照';graphic.append(summary);
   const clone=original.cloneNode(true);clone.removeAttribute('data-panel');clone.classList.remove('is-inactive','piece');clone.hidden=false;
   // Date-range, relationship and comparison panels contain no generated IDs.
   clone.querySelectorAll('[id]').forEach(el=>el.removeAttribute('id'));
