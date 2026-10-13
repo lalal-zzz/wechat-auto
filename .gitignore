@@ -57,7 +57,21 @@ exports/
 data/
 *.db
 *.sqlite
+*.sqlite3
+*.db-wal
+*.db-shm
+*.sqlite3-wal
+*.sqlite3-shm
+*.bakdb
+*.bundle
 data/.secrets/
+scratch/
+*.jpeg
+*.webp
+*.gif
+*.mp3
+*.wav
+*.mp4
 
 # Local development ledgers (keep on disk, never publish)
 docs/PROJECT_STATE.md

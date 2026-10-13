@@ -201,8 +201,6 @@ Skills are static Markdown instructions, not autonomous background services. Kee
 
 ```powershell
 python -m pytest tests -q
-# Recorded project verification command:
-python -m pytest tests -q
 ```
 
 Use File Transfer Assistant for live checks. Opening a chat or preparing a draft does not authorize sending. Sends, stickers, likes, comments, profile mutations and remote-media downloads require explicit confirmation. Actions do not use injection, hooks, WeChat database writes or private messaging protocols. The supported UI architecture excludes WeChat 3.x and UIAutomation control-tree compatibility.
@@ -210,6 +208,24 @@ Use File Transfer Assistant for live checks. Opening a chat or preparing a draft
 Chat archives, media, screenshots, exports and secrets are private local artifacts. Protect secrets with Windows DPAPI under data/.secrets/; never commit or print them. The project does not claim Tencent endorsement or zero account-enforcement risk.
 
 Repository: src/wechat_auto/ (MCP runtime and supporting implementation), skills/ (instructions), scripts/ (tools), tests/ (regressions), docs/ (contracts and guides), data/ (ignored private artifacts). Operational ledgers and diagnostic records stay local.
+
+## TODO (not completed)
+
+See the [roadmap](docs/FUTURE_TODO.md) for dependencies and acceptance criteria. These are planned features, not validated current capabilities.
+
+- [ ] Validate UI automation: HWND/page recognition, contact identity, draft preparation/cancellation, focus/layout changes and observable postconditions. Confirm each external action; keep private live-test evidence local.
+- [ ] Detect red packets and notify: use directory-change-triggered message increments plus read-only current-page checks; distinguish available, claimed, exhausted, expired and unknown states. Add deduplication, conversation allowlists, quiet hours and a stop switch.
+- [ ] Authorized red-packet claiming: observations feed BasicSkill; first implement confirmation for each claim, current-conversation/packet binding and post-action verification without automatic retries. Continuous claiming requires a separate explicit scope grant, revocation, amount/frequency limits and live validation. Sending red packets, transfers and payments are outside this item.
+- [ ] Incremental data and analysis: scoped freshness checks, source ledgers, resumable media tasks, complete event stages and traceable evidence.
+- [ ] Reply policies and product features: allowlists, quiet hours, rate limits, context rebuilding, user corrections, message types, quotes and group mentions.
+- [ ] Release privacy checks: all branches/history, public source and commit metadata; use synthetic `wxid_test_*` test identities and exclude machine paths and private ledgers.
+
+```powershell
+python scripts\audit_public_privacy.py
+python scripts\audit_public_privacy.py --all-history
+```
+
+The scanner reports paths and rule names only and checks common leakage patterns. Names, message bodies and other unstructured private information still need human review.
 
 ## Documentation
 
