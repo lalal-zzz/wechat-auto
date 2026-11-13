@@ -1,12 +1,13 @@
 """Local voice extraction and provenance-preserving transcription. No network/UI."""
 from __future__ import annotations
+
 import hashlib
 import json
 import sqlite3
 import tempfile
 import xml.etree.ElementTree as ET
-from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 
 
 def embedded_transcript(content: str) -> str:
@@ -85,8 +86,8 @@ class VoiceTranscriptions:
 
     def import_native(self, chat, media_paths=(), message_sources=()):
         """Read explicit decrypted local VoiceInfo shards; do not guess a transcript field."""
-        stats = dict(voices=0, audio_saved=0, native_transcripts_saved=0, missing_audio=0,
-                     unsupported_transcript_shards=0, identities_recovered=0, ambiguous_identity=0, unmatched_audio=0)
+        stats = {"voices": 0, "audio_saved": 0, "native_transcripts_saved": 0, "missing_audio": 0,
+                     "unsupported_transcript_shards": 0, "identities_recovered": 0, "ambiguous_identity": 0, "unmatched_audio": 0}
         identities=self._source_identities(chat,message_sources)
         sources=[]
         try:
@@ -192,7 +193,8 @@ class VoiceTranscriptions:
                 with tempfile.TemporaryDirectory(prefix="wechat-voice-") as folder:
                     audio=Path(folder)/"voice.audio";audio.write_bytes(payload)
                     if b"#!SILK_V3" in bytes(payload)[:20]:
-                        try: import pilk
+                        try:
+                            import pilk
                         except ImportError as exc: raise RuntimeError("SILK decoding requires pilk") from exc
                         import wave
                         pcm=Path(folder)/"voice.pcm";pilk.decode(str(audio),str(pcm),pcm_rate=24000)
@@ -200,7 +202,7 @@ class VoiceTranscriptions:
                         with wave.open(str(audio),'wb') as out:
                             out.setnchannels(1);out.setsampwidth(2);out.setframerate(24000);out.writeframes(pcm.read_bytes())
                     segments,_=model.transcribe(str(audio),language="zh",vad_filter=True)
-                    parts=[dict(start=s.start,end=s.end,text=s.text,avg_logprob=s.avg_logprob,no_speech_prob=s.no_speech_prob) for s in segments]
+                    parts=[{"start": s.start,"end": s.end,"text": s.text,"avg_logprob": s.avg_logprob,"no_speech_prob": s.no_speech_prob} for s in segments]
                     text="".join(p["text"] for p in parts).strip()
                     if text:
                         state="transcribed"
@@ -219,5 +221,5 @@ class VoiceTranscriptions:
                 else:failed+=1
                 with self.history._connection:
                     self.history._connection.execute("INSERT INTO voice_transcription_attempts(message_id,audio_sha256,model_ref,status,error_code) VALUES(?,?,?,?,?) ON CONFLICT(message_id,audio_sha256,model_ref) DO UPDATE SET status=excluded.status,error_code=excluded.error_code,updated_at=CURRENT_TIMESTAMP",(mid,digest,str(model_path),state,code))
-                if progress:progress(dict(processed=index+1,total=len(selected),transcribed=done,failed=failed,empty=empty))
-        return dict(attempted=len(selected),transcribed=done,failed=failed,empty=empty,device=device)
+                if progress:progress({"processed": index+1,"total": len(selected),"transcribed": done,"failed": failed,"empty": empty})
+        return {"attempted": len(selected),"transcribed": done,"failed": failed,"empty": empty,"device": device}

@@ -34,7 +34,7 @@
 | sync.capture_contact_profile | 唯一且身份核验的资料页显式字段补采与索引 | 不猜测隐藏签名或身份 |
 | sync.load_contact_moments | 逐人有界 UI 加载后重新读取本地库 | 不证明远程完整覆盖、不授权媒体下载 |
 | sync.moments_coverage | 读取目标人物的缓存/UI 覆盖记录 | 不是好友删除证明 |
-| analysis.jobs / analysis.claim_job | 有限 pending 列表 / 原子领取下一任务；可选 job_id 只领取该 pending 任务 | 列表空不代表依赖就绪；没有按任意 scope 自动过滤发现任务的接口 |
+| analysis.jobs / analysis.claim_job | 有限 pending 列表 / 按可选 job_id 或精确 scope 原子领取 | 列表空不代表依赖就绪；analysis.scope_status 可查询目标及已登记上游的任务和版本索引 |
 | analysis.get_*_input | 读取当前归档或已存在 Memory 作为分析输入 | 不自动执行同步或外部 Agent 分析 |
 | analysis.submit | 提交完整 Markdown、短 Claim/Event 与覆盖；后端计算输入指纹 | 不接受客户端伪造的指纹或自动补齐未完成上游 |
 | charts.refresh | 根据已有结构化结果生成视图 | 不更新来源或完成分析 |
@@ -109,7 +109,7 @@ Skill 名当成可调用函数；联动本身不授权创建代理、后台任�
 事件更新反向影响会话/人物时，只处理真正变化的依赖，不能形成无限刷新循环。
 领取任务后核对返回的 scope_type/scope_id/period，不把别的范围任务当作当前任务
 提交或完成；已核对目标任务 ID 时用可选 job_id 精确领取。指定任务不存在、未到可运行
-时间或已在运行时返回空，不回退到其他任务。未知任务 ID 的范围发现仍需调度器处理。
+时间或已在运行时返回空，不回退到其他任务。未知任务 ID 时可按 scope_type、scope_id 和 period 精确领取；空 period 表示对象汇总层。
 
 ## 运行时边界
 
@@ -129,3 +129,26 @@ unknown。后续运行时工作见 FUTURE_TODO.md 的 WA-007，不能用本文�
 语音归档后显式运行项目本地转写阶段，保存原音频与文字，再交接受影响月份。默认用程序本地 ASR，不依赖微信 UI 转文字；具体入口和配置见本 Skill 的语音相关说明或本目录存储/分析标准。
 
 scripts/transcribe_voice.py 处理现存归档和明确的本地语音分片，不从微信采集全部最新消息。识别成功只产生派生消息证据及待分析月份，不自动完成月报或 HTML。缺音频、未转写、未审核、未阅读分别交接；新文字/更正按月份→会话→人物/关系→图表更新，原始记录和分析历史保留。纯界面刷新不代替此链路。
+
+## 运行时依赖诊断
+
+`status.summary.runtime` 分别报告 `ui` 与 `conversation_backend` 的
+`available`、`unavailable` 或 `not_configured` 状态。使用 `--with-wechat-runtime`
+时，微信连接或后端初始化失败会保留离线 Memory 与诊断工具；失败依赖对应工具
+不注册。错误仅返回异常类型或固定原因，不返回私人路径、账号、正文或密钥。
+该状态表示启动装配结果，不证明当前来源新鲜度、账号身份或 UI 页面仍有效；
+Memory 库自身不可用或 schema 不兼容仍会停止启动。
+
+`monitor.run_once` 仅在本次回复上下文成功构建后推进 reply_monitor 水位；
+失败时旧水位保留，可重读同一批输入。归档水位与回复处理水位分别记录，
+已经成功的原始归档不因回复失败回滚；本次脏节点、按月任务和回复水位在上下文构建后原子登记。
+监控引用消息 ID 使用会话、local_id、sort_seq、server_id 和类型的稳定组合，
+不再以单独 local_id/server_id 作为完整归档身份。历史归档水位只前进，不由
+较早的重导入批次倒退；这些约束仍不代表按范围来源新鲜度门禁已完成。
+
+MCP 的 `--with-wechat-runtime` 数据库通过现有 DPAPI 只读入口装配，
+`--secret-dir` 指定本机保护目录，默认 `data/.secrets`；数据库工作目录随
+stdio 退出或启动失败清理。可选依赖导入输出不得写入协议 stdout，
+其日志不能充当成功回执。直接适配器默认也通过 DPAPI 只读入口打开数据库；使用 `with` 或 `close()`
+释放本适配器拥有的工作副本，初始化失败会清理，重复关闭不会重复释放。
+注入数据库的生命周期仍由调用方管理，适配器关闭不会关闭调用方连接。

@@ -11,8 +11,9 @@ import json
 import tempfile
 from collections.abc import Iterator
 from contextlib import contextmanager
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 
+from wechat_auto.backends.replica_import import replica_module
 from wechat_auto.storage import LocalSecretStore
 
 SECRET_NAME = "wechat_db_keys"
@@ -25,10 +26,16 @@ def _validate_keys(value: object) -> dict[str, str]:
     for rel, encoded in value.items():
         if not isinstance(rel, str) or not isinstance(encoded, str):
             raise TypeError("Invalid local WeChat database key cache")
+        relative = PureWindowsPath(rel)
+        if (not rel or relative.drive or relative.root or '..' in relative.parts
+                or any(ord(ch) < 32 for ch in rel)):
+            raise RuntimeError("Invalid local WeChat database key cache")
         try:
-            bytes.fromhex(encoded)
+            decoded = bytes.fromhex(encoded)
         except ValueError as exc:
             raise RuntimeError("Invalid local WeChat database key cache") from exc
+        if not decoded:
+            raise RuntimeError("Invalid local WeChat database key cache")
         result[rel] = encoded
     return result
 
@@ -58,13 +65,20 @@ def open_dpapi_wechat_db(
     include_message_family: bool = False,
 ) -> Iterator[object]:
     """Yield a read-only adapter DB built from DPAPI keys, without key scans."""
-    from wechatauto.db import WeChatDB, auto_detect_db_dir
+    module = replica_module('wechatauto.db')
+    WeChatDB, auto_detect_db_dir = module.WeChatDB, module.auto_detect_db_dir
 
     payload = LocalSecretStore(secret_dir).load(SECRET_NAME)
     if payload is None:
         payload = migrate_existing_key_cache(secret_dir)
+    if not isinstance(payload, dict):
+        raise TypeError('Invalid local WeChat account configuration')
     keys = _validate_keys(payload.get("keys"))
     account = str(payload.get("account", "")).strip()
+    account_path = PureWindowsPath(account)
+    if (not account or account in {'.', '..'} or account_path.name != account
+            or account_path.drive or account.endswith('.') or any(ord(ch) < 32 for ch in account)):
+        raise RuntimeError('Invalid local WeChat account configuration')
     db_dir = auto_detect_db_dir()
     if not db_dir or not account:
         raise RuntimeError("Cannot locate the local WeChat account database")

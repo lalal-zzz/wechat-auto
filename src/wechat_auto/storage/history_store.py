@@ -10,7 +10,8 @@ import hashlib
 import json
 import re
 import sqlite3
-from collections.abc import Iterable
+from collections.abc import Iterable, Iterator
+from contextlib import closing, contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -49,6 +50,13 @@ class HistoryStore:
         self.path = Path(path).expanduser().resolve()
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._connection = sqlite3.connect(self.path)
+        try:
+            self._initialize_schema()
+        except BaseException:
+            self._connection.close()
+            raise
+
+    def _initialize_schema(self) -> None:
         self._connection.execute("""
             CREATE TABLE IF NOT EXISTS messages (
                 id TEXT PRIMARY KEY, chat TEXT NOT NULL, sender TEXT,
@@ -115,6 +123,7 @@ class HistoryStore:
         self.close()
 
     def save_messages(self, messages: Iterable[dict]) -> int:
+        self.last_voice_processing = []
         rows = []
         media_rows = []
         fingerprints = []
@@ -145,32 +154,45 @@ class HistoryStore:
                                    len(payload), digest, sqlite3.Binary(payload)))
         if not rows:
             return 0
-        existing_rows = list(self._connection.execute(
-            "SELECT fingerprint FROM messages WHERE fingerprint IN ({})".format(",".join("?" for _ in set(fingerprints))), tuple(set(fingerprints))
-        ))
-        existing = {row[0] for row in existing_rows}
-        existing_ids = {row[0]: row[1] for row in self._connection.execute(
-            "SELECT fingerprint,id FROM messages WHERE fingerprint IN ({})".format(",".join("?" for _ in set(fingerprints))), tuple(set(fingerprints))
-        )}
-        filtered_rows = []
-        seen = set(existing)
-        message_id_map = {}
+        supplied_ids = {}
         for row in rows:
-            message_id_map[row[0]] = existing_ids.get(row[-1], row[0])
-            if row[-1] in seen:
-                continue
-            seen.add(row[-1])
-            filtered_rows.append(row)
-        media_rows = [
-            (media_id, message_id_map.get(message_id, message_id), chat, kind, mime_type,
-             original_ref, local_name, size, digest, data)
-            for media_id, message_id, chat, kind, mime_type, original_ref, local_name,
-            size, digest, data in media_rows
-        ]
-        if not filtered_rows and not media_rows:
-            return 0
-        before = self._connection.total_changes
+            previous = supplied_ids.setdefault(row[0], (row[1], row[-1]))
+            if previous != (row[1], row[-1]):
+                raise ValueError('Message ID collision has conflicting conversation or fingerprint')
         with self._connection:
+            self._connection.execute("BEGIN IMMEDIATE")
+            for message_id, chat, fingerprint in self._connection.execute(
+                "SELECT id,chat,fingerprint FROM messages WHERE id IN ({})".format(
+                    ','.join('?' for _ in supplied_ids)), tuple(supplied_ids)
+            ):
+                if supplied_ids[message_id] != (chat, fingerprint):
+                    raise ValueError('Message ID collision has conflicting conversation or fingerprint')
+            existing_rows = list(self._connection.execute(
+                "SELECT fingerprint FROM messages WHERE fingerprint IN ({})".format(",".join("?" for _ in set(fingerprints))), tuple(set(fingerprints))
+            ))
+            existing = {row[0] for row in existing_rows}
+            existing_ids = {row[0]: row[1] for row in self._connection.execute(
+                "SELECT fingerprint,id FROM messages WHERE fingerprint IN ({})".format(",".join("?" for _ in set(fingerprints))), tuple(set(fingerprints))
+            )}
+            filtered_rows = []
+            seen = set(existing)
+            message_id_map = {}
+            canonical_ids = dict(existing_ids)
+            for row in rows:
+                message_id_map[row[0]] = canonical_ids.setdefault(row[-1], row[0])
+                if row[-1] in seen:
+                    continue
+                seen.add(row[-1])
+                filtered_rows.append(row)
+            media_rows = [
+                (media_id, message_id_map.get(message_id, message_id), chat, kind, mime_type,
+                 original_ref, local_name, size, digest, data)
+                for media_id, message_id, chat, kind, mime_type, original_ref, local_name,
+                size, digest, data in media_rows
+            ]
+            if not filtered_rows and not media_rows and self.voice_model_path is None:
+                return 0
+            before = self._connection.total_changes
             self._connection.executemany("""
                 INSERT INTO messages(id,chat,sender,content,message_time,direction,source,raw_json,fingerprint)
                 VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO NOTHING
@@ -180,18 +202,18 @@ class HistoryStore:
                 VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO NOTHING
             """, media_rows)
         added = self._connection.total_changes - before
-        self.last_voice_processing = []
         if self.voice_model_path:
-            from wechat_auto.storage.voice_transcription import VoiceTranscriptions
-            processor = VoiceTranscriptions(self)
             by_chat = {}
             for row in rows:
                 if str(json.loads(row[7]).get("type")) in {"语音", "34"}:
                     by_chat.setdefault(row[1], set()).add(message_id_map.get(row[0], row[0]))
-            for chat, ids in by_chat.items():
-                result = processor.transcribe_local(chat, self.voice_model_path,
-                    device=self.voice_device, message_ids=ids, limit=max(len(ids), 1))
-                self.last_voice_processing.append({"chat": chat, **result})
+            if by_chat:
+                from wechat_auto.storage.voice_transcription import VoiceTranscriptions
+                processor = VoiceTranscriptions(self)
+                for chat, ids in by_chat.items():
+                    result = processor.transcribe_local(chat, self.voice_model_path,
+                        device=self.voice_device, message_ids=ids, limit=max(len(ids), 1))
+                    self.last_voice_processing.append({"chat": chat, **result})
         return added
 
     def save_snapshot(self, snapshot: dict) -> int:
@@ -236,22 +258,82 @@ class HistoryStore:
                 "time": row[4], "direction": row[5], "source": row[6],
                 "raw": json.loads(row[7]), "media": self.fetch_media(row[0])}])[0]
 
-    def fetch_month(self, chat: str, period: str, *, after_id: str = "",
-                    limit: int = 5000) -> list[dict]:
-        """Read one calendar month for incremental analysis without media BLOBs."""
+    @staticmethod
+    def _month_bounds(period: str) -> tuple[int, int, str]:
         if not re.fullmatch(r"\d{4}-\d{2}", period):
             raise ValueError("period must use YYYY-MM")
-        if limit <= 0 or limit > 100_000:
-            raise ValueError("limit must be from 1 through 100000")
         china = timezone(timedelta(hours=8))
         start = datetime.strptime(period + "-01", "%Y-%m-%d").replace(tzinfo=china)
         if start.month == 12:
             end = start.replace(year=start.year + 1, month=1)
         else:
             end = start.replace(month=start.month + 1)
-        start_epoch, end_epoch = int(start.timestamp()), int(end.timestamp())
-        clauses = ["chat=?", ("((length(message_time)=10 AND CAST(message_time AS INTEGER)>=? "
-                   "AND CAST(message_time AS INTEGER)<?) OR substr(message_time,1,7)=?)")]
+        return int(start.timestamp()), int(end.timestamp()), period
+
+    _MONTH_FILTER = ("chat=? AND ((length(trim(message_time)) IN (10,13) "
+                     "AND trim(message_time) NOT GLOB '*[^0-9]*' "
+                     "AND CAST(substr(trim(message_time),1,10) AS INTEGER)>=? "
+                     "AND CAST(substr(trim(message_time),1,10) AS INTEGER)<?) "
+                     "OR substr(trim(message_time),1,7)=?)")
+    _TRANSCRIPT_FIELDS = ("version", "text", "engine", "status", "source_ref", "audio_sha256")
+
+    @staticmethod
+    def _has_transcriptions(connection: sqlite3.Connection) -> bool:
+        return connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='voice_transcriptions'"
+        ).fetchone() is not None
+
+    def month_message_snapshot(self, chat: str, period: str) -> str:
+        """Fingerprint archived messages and the latest transcriptions exposed to analysis."""
+        return self._month_message_snapshot(self._connection, chat, period)
+
+    @classmethod
+    def read_month_message_snapshot(cls, path: str | Path, chat: str, period: str) -> str:
+        with closing(sqlite3.connect(Path(path).resolve().as_uri() + "?mode=ro", uri=True)) as connection:
+            connection.execute("BEGIN")
+            return cls._month_message_snapshot(connection, chat, period)
+
+    @classmethod
+    def _month_message_snapshot(cls, connection: sqlite3.Connection, chat: str, period: str) -> str:
+        bounds = cls._month_bounds(period)
+        digest = hashlib.sha256(json.dumps([chat, period]).encode("utf-8"))
+        for row in connection.execute(
+            "SELECT id,sender,content,message_time,direction,source,raw_json "
+            f"FROM messages WHERE {cls._MONTH_FILTER} ORDER BY rowid", (chat, *bounds)
+        ):
+            digest.update(json.dumps(row).encode("utf-8") + b"\n")
+        if cls._has_transcriptions(connection):
+            fields = ",".join(f"t.{field}" for field in cls._TRANSCRIPT_FIELDS)
+            for row in connection.execute(
+                f"SELECT m.id,{fields} FROM messages m "
+                "JOIN voice_transcriptions t ON t.rowid=("
+                "SELECT rowid FROM voice_transcriptions WHERE message_id=m.id ORDER BY version DESC LIMIT 1) "
+                f"WHERE {cls._MONTH_FILTER} ORDER BY m.rowid", (chat, *bounds)
+            ):
+                digest.update(json.dumps(["transcription", *row]).encode("utf-8") + b"\n")
+        return digest.hexdigest()
+
+    @contextmanager
+    def protect_archive_snapshot(self) -> Iterator[None]:
+        """Keep archive writers out while verified analysis is published."""
+        self._connection.execute("BEGIN IMMEDIATE")
+        try:
+            yield
+        finally:
+            self._connection.rollback()
+
+    @contextmanager
+    def protect_month_snapshot(self, chat: str, period: str) -> Iterator[str]:
+        with self.protect_archive_snapshot():
+            yield self.month_message_snapshot(chat, period)
+
+    def fetch_month(self, chat: str, period: str, *, after_id: str = "",
+                    limit: int = 5000) -> list[dict]:
+        """Read one calendar month for incremental analysis without media BLOBs."""
+        if limit <= 0 or limit > 100_000:
+            raise ValueError("limit must be from 1 through 100000")
+        start_epoch, end_epoch, period = self._month_bounds(period)
+        clauses = [self._MONTH_FILTER]
         params: list[object] = [chat, start_epoch, end_epoch, period]
         if after_id:
             clauses.append("rowid>(SELECT rowid FROM messages WHERE id=?)")
@@ -292,12 +374,15 @@ class HistoryStore:
 
     def with_transcriptions(self, items: list[dict]) -> list[dict]:
         """Attach derived text without overwriting original XML or loading audio."""
-        exists = self._connection.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='voice_transcriptions'").fetchone()
-        if exists:
+        if self._has_transcriptions(self._connection):
+            fields = ",".join(self._TRANSCRIPT_FIELDS)
             for item in items:
-                row = self._connection.execute("SELECT version,text,engine,status,source_ref,audio_sha256 FROM voice_transcriptions WHERE message_id=? ORDER BY version DESC LIMIT 1", (item["id"],)).fetchone()
+                row = self._connection.execute(
+                    f"SELECT {fields} FROM voice_transcriptions WHERE message_id=? ORDER BY version DESC LIMIT 1",
+                    (item["id"],),
+                ).fetchone()
                 if row:
-                    item["transcription"] = dict(zip(("version","text","engine","status","source_ref","audio_sha256"),row))
+                    item["transcription"] = dict(zip(self._TRANSCRIPT_FIELDS, row))
         return items
 
     def get_cursor(self, source: str, chat: str) -> int:
@@ -307,9 +392,11 @@ class HistoryStore:
         return int(row[0]) if row else 0
 
     def set_cursor(self, source: str, chat: str, sort_seq: int) -> None:
+        if int(sort_seq) < 0:
+            raise ValueError('sort_seq must not be negative')
         self._connection.execute("""
             INSERT INTO sync_cursors(source,chat,sort_seq) VALUES(?,?,?)
-            ON CONFLICT(source,chat) DO UPDATE SET sort_seq=excluded.sort_seq,
+            ON CONFLICT(source,chat) DO UPDATE SET sort_seq=MAX(sync_cursors.sort_seq,excluded.sort_seq),
                 updated_at=CURRENT_TIMESTAMP
         """, (source, chat, int(sort_seq)))
         self._connection.commit()

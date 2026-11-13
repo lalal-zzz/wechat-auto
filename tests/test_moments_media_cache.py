@@ -2,6 +2,7 @@ import hashlib
 import json
 from io import BytesIO
 from types import SimpleNamespace
+from unittest.mock import MagicMock
 
 import pytest
 from PIL import Image
@@ -67,3 +68,39 @@ def test_one_confirmed_remote_image_is_validated_and_saved(tmp_path, monkeypatch
         assert result['success'] and not result['automatic_retry']
         row = store._connection.execute('SELECT content,source FROM message_media').fetchone()
         assert row == (content.getvalue(), 'confirmed_remote_download')
+
+
+@pytest.mark.parametrize('failure', ['http', 'timeout', 'invalid_image', 'empty'])
+def test_remote_failure_does_not_retry_or_modify_existing_media(tmp_path, monkeypatch, failure):
+    import urllib.error
+    import urllib.request
+
+    request = MagicMock()
+    if failure == 'http':
+        request.side_effect = urllib.error.HTTPError('https://example.invalid', 403, 'synthetic', {}, None)
+    elif failure == 'timeout':
+        request.side_effect = TimeoutError('synthetic')
+    else:
+        request.return_value = BytesIO(b'invalid image' if failure == 'invalid_image' else b'')
+    monkeypatch.setattr(urllib.request, 'urlopen', request)
+    with MomentStore(tmp_path / 'm.db') as store:
+        store.save([{'id': 'm1', 'username': 'wxid_test_one'}])
+        reviewed = item()
+        store.save_media(reviewed['item_id'], 'm1', 'image', b'original')
+        result = download_approved_item(reviewed, store, confirm=True)
+        assert not result['success'] and not result['automatic_retry']
+        assert request.call_count == 1
+        assert store._connection.execute('SELECT content FROM message_media').fetchone()[0] == b'original'
+
+
+def test_unsupported_kind_is_rejected_before_network(tmp_path, monkeypatch):
+    import urllib.request
+
+    request = MagicMock()
+    monkeypatch.setattr(urllib.request, 'urlopen', request)
+    with MomentStore(tmp_path / 'm.db') as store:
+        reviewed = item()
+        reviewed['kind'] = 'unsupported'
+        with pytest.raises(ValueError, match='image/video'):
+            download_approved_item(reviewed, store, confirm=True)
+    request.assert_not_called()

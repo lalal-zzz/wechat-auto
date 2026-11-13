@@ -24,23 +24,41 @@ class AgentLoop:
         self._running = False
 
     def connect(self) -> AgentLoop:
-        self._application.connect()
-        if self._session.auto_activate:
-            self._application.activate()
-        self._router = SkillRouter()
-        self._basic_skill = BasicSkill(self._application, self._config, self._session)
-        self._router.register_skill(self._basic_skill.name, self._basic_skill.execute)
+        if self.is_connected:
+            return self
+        self._router = None
+        self._basic_skill = None
+        try:
+            self._application.connect()
+            if self._session.auto_activate:
+                self._application.activate()
+            router = SkillRouter()
+            basic = BasicSkill(self._application, self._config, self._session)
+            router.register_skill(basic.name, basic.execute)
+            self._router = router
+            self._basic_skill = basic
+        except BaseException:
+            self._router = None
+            self._basic_skill = None
+            try:
+                self._application.disconnect()
+            except BaseException as cleanup_error:
+                logger.warning("AgentLoop startup cleanup failed (%s)", type(cleanup_error).__name__)
+            raise
         return self
 
     def disconnect(self) -> None:
         self._running = False
-        self._application.disconnect()
-        self._router = None
-        self._basic_skill = None
+        try:
+            self._application.disconnect()
+        finally:
+            self._router = None
+            self._basic_skill = None
 
     @property
     def is_connected(self) -> bool:
-        return self._application.is_connected()
+        return bool(self._router is not None and self._basic_skill is not None
+                    and self._application.is_connected())
 
     @property
     def application(self) -> Application:
@@ -48,17 +66,19 @@ class AgentLoop:
 
     @property
     def router(self) -> SkillRouter:
-        if self._router is None:
+        if not self.is_connected:
             raise RuntimeError("Not connected. Call connect() first.")
         return self._router
 
     @property
     def basic_skill(self) -> BasicSkill:
-        if self._basic_skill is None:
+        if not self.is_connected:
             raise RuntimeError("Not connected. Call connect() first.")
         return self._basic_skill
 
     def step(self) -> dict:
+        if not self.is_connected:
+            raise RuntimeError("Not connected. Call connect() first.")
         if self._session.auto_activate:
             self._application.ensure_interactable()
         if self._observer is None:
@@ -67,14 +87,17 @@ class AgentLoop:
 
     def run(self, poll_interval: float = 5.0) -> None:
         self._running = True
-        while self._running:
-            try:
-                if not self.is_connected:
-                    self.connect()
-                self.step()
-            except Exception as exc:
-                logger.error("AgentLoop step failed: %s", exc)
-            time.sleep(poll_interval)
+        try:
+            while self._running:
+                try:
+                    if not self.is_connected:
+                        self.connect()
+                    self.step()
+                except Exception as exc:
+                    logger.error("AgentLoop step failed (%s)", type(exc).__name__)
+                time.sleep(poll_interval)
+        finally:
+            self._running = False
 
     def stop(self) -> None:
         self._running = False

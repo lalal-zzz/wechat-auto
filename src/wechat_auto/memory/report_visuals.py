@@ -1,11 +1,11 @@
 """Offline infographics from reviewed display specs bound to formal prose."""
 from __future__ import annotations
 
-from collections import defaultdict
-from html import escape
-from datetime import date
 import calendar
 import re
+from collections import defaultdict
+from datetime import date
+from html import escape
 
 
 def _time_range_chart(items: list[dict]) -> str:

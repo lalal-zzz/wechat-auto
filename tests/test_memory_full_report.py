@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from wechat_auto.memory import MemoryStore, MarkdownMemory
+from wechat_auto.memory import MarkdownMemory, MemoryStore
 from wechat_auto.memory.report import FullReportBuilder, render_markdown
 
 

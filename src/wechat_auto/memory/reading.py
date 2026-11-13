@@ -1,6 +1,6 @@
 """Lossless natural-text reading helpers; never display media XML attributes."""
-import xml.etree.ElementTree as ET
 import re
+import xml.etree.ElementTree as ET
 from datetime import datetime, timedelta, timezone
 
 TEXT_TAGS = {'title', 'des', 'desc', 'content', 'recorditem', 'datadesc',
@@ -8,6 +8,22 @@ TEXT_TAGS = {'title', 'des', 'desc', 'content', 'recorditem', 'datadesc',
              'transcription', 'label', 'poiid'}
 XML_START = re.compile(r'<(?:\?xml\b|(?:msg|appmsg|recordinfo|emoji|voicemsg|videomsg|img|sysmsg|location)(?=[\s/>]))')
 MEDIA_TYPES = {'图片', '动画表情', '语音', '视频', '3', '34', '43', '47'}
+
+
+def transcription_text(transcript):
+    """Render only supported successful records, retaining review provenance."""
+    if transcript is None:
+        return '', []
+    if not isinstance(transcript, dict):
+        return '[语音转写不可用]', ['invalid transcription record']
+    text = transcript.get('text')
+    engine, status = transcript.get('engine'), transcript.get('status')
+    if isinstance(text, str) and text.strip():
+        if engine == 'user_corrected' and status == 'user_corrected':
+            return '[语音转写 · 用户修订] ' + text, []
+        if engine in ('wechat_native', 'local_asr') and status == 'transcribed_unreviewed':
+            return '[语音转写 · ' + engine + ' · 未经复核] ' + text, []
+    return '[语音转写不可用]', ['transcription missing or unsupported status; requires inspection']
 
 
 def display_time(value):
@@ -25,13 +41,14 @@ def readable_message(message, *, recover_xml=False):
     content = str(message.get('content') or '')
     parts = []
     errors = []
+    embedded = []
     raw = message.get('raw') or {}
     media = isinstance(raw, dict) and str(raw.get('type')) in MEDIA_TYPES
 
     def retain_prefix(prefix):
         prefix = prefix.strip()
         if (prefix and not re.search(r'<[A-Za-z_!?/]', prefix)
-                and not re.search(r'\b(?:aeskey|cdnurl|encryptedkey|md5)\s*=', prefix, re.I)
+                and not re.search(r'\b(?:aeskey|cdnurl|encryptedkey|md5)\s*=', prefix, re.IGNORECASE)
                 and all(c.isprintable() or c in '\n\r\t' for c in prefix)
                 and prefix not in parts):
             parts.append(prefix)
@@ -64,6 +81,10 @@ def readable_message(message, *, recover_xml=False):
             tag = node.tag.rsplit('}', 1)[-1].lower()
             if tag in TEXT_TAGS and node.text and node.text.strip():
                 text = node.text.strip()
+                if tag in {'voicetrans', 'transcription'}:
+                    if text not in embedded:
+                        embedded.append(text)
+                    continue
                 if text.startswith('<') or XML_START.search(text):
                     match = XML_START.search(text)
                     if match:
@@ -85,9 +106,20 @@ def readable_message(message, *, recover_xml=False):
             parse_xml(value)
         elif value and value not in parts:
             parts.append(value)
-    transcript = message.get("transcription") or {}
-    if isinstance(transcript, dict) and transcript.get("text"):
-        parts.append("[语音转写 · " + str(transcript.get("engine", "unknown")) + " · " + str(transcript.get("status", "unreviewed")) + "] " + transcript["text"])
+    transcript, transcript_errors = transcription_text(message.get('transcription'))
+    attached = message.get('transcription')
+    attached_text = (attached.get('text', '').strip()
+                     if isinstance(attached, dict) and isinstance(attached.get('text'), str)
+                     and not transcript_errors else '')
+    # Keep distinct historical candidates visible, but never present them as
+    # ordinary speech or repeat an identical successful attached transcription.
+    if '\n'.join(embedded) != attached_text:
+        for candidate in embedded:
+            if candidate != attached_text:
+                parts.append('[语音转写 · XML内嵌候选 · 未经复核] ' + candidate)
+    if transcript:
+        parts.append(transcript)
+    errors.extend(transcript_errors)
     if not parts and (readable or content):
         parts.append('[XML/媒体正文未解读]')
     return parts, list(dict.fromkeys(errors))

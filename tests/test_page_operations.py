@@ -61,6 +61,48 @@ def test_observation_failure_stops_action(mock_app, config, session):
     skill.keyboard_only.click_window_fraction.assert_not_called()
 
 
+def test_chat_with_embedded_panel_still_requires_navigation_control(mock_app, config, session):
+    from PIL import Image
+
+    from wechat_auto.primitives.page_controls import NavigationControlError
+
+    skill = BasicSkill(mock_app, config, session)
+    skill._vision_auto = MagicMock()
+    skill._keyboard_only_auto = MagicMock()
+    skill.vision.observe_page.return_value = {'ok': True, 'boxes': [], 'state': {
+        'page': 'chat', 'panels': [{'key': 'web_search'}],
+        'overlays': [], 'content_windows': [], 'size': [800, 600]}}
+    skill.vision.capture.return_value = Image.new('RGB', (800, 600))
+    mock_app.list_windows.return_value = [{'is_main': True, 'class': 'Qt'}]
+    skill.prepare_visual_review = MagicMock(side_effect=RuntimeError('No review'))
+    with patch('wechat_auto.primitives.page_controls.find_navigation_control',
+               side_effect=NavigationControlError('Ambiguous')) as locate:
+        receipt = skill.page_operation('open_chats', max_attempts=1)
+    assert receipt['success'] is False
+    assert receipt['input_dispatched'] is False
+    locate.assert_called_once()
+    skill.keyboard_only.click_window_fraction.assert_not_called()
+
+
+@pytest.mark.parametrize('page', ['chat', 'group_chat', 'file_transfer', 'main_without_selected_chat'])
+def test_already_visible_chat_needs_no_obscured_sidebar_click(mock_app, config, session, page):
+    skill = BasicSkill(mock_app, config, session)
+    skill._vision_auto = MagicMock()
+    skill._keyboard_only_auto = MagicMock()
+    skill.vision.observe_page.return_value = {'ok': True, 'state': {
+        'page': page, 'panels': [], 'overlays': [], 'content_windows': []}}
+    mock_app.list_windows.return_value = [{'is_main': True, 'class': 'Qt'}]
+    with patch('wechat_auto.primitives.page_controls.find_navigation_control',
+               side_effect=AssertionError('No control lookup for an already visible target')):
+        receipt = skill.page_operation('open_chats')
+    assert receipt['success'] is True
+    assert receipt['already_at_target'] is True
+    assert receipt['input_dispatched'] is False
+    assert receipt['sent'] is False
+    assert not getattr(skill, '_recipient_lease', None)
+    skill.keyboard_only.click_window_fraction.assert_not_called()
+
+
 def test_main_window_is_never_closed_even_if_content_type_matches(mock_app, config, session):
     skill = BasicSkill(mock_app, config, session)
     skill._vision_auto = MagicMock()
@@ -98,6 +140,7 @@ def test_search_clears_existing_query_and_ignores_microphone_ocr(mock_app, confi
     skill._keyboard_only_auto = MagicMock()
     skill.vision.capture.return_value = Image.new('RGB', (200, 100))
     field = {'x': 10, 'y': 10, 'w': 100, 'h': 30}
+    mock_app.focused_caret_rect.return_value = [25, 20, 27, 30]
     def text_box(text, x=20, w=50):
         return {'text': text, 'x': x, 'y': 15, 'w': w, 'h': 15, 'score': .99}
     skill.vision.recognize_image.side_effect = [[text_box('旧关键词')],
@@ -166,3 +209,33 @@ def test_divider_drag_rejects_stale_point_and_verifies_actual_movement(mock_app,
     with patch('wechat_auto.primitives.page_geometry.observe_geometry', side_effect=[
             before, {'vertical_separators': [{'x': 400}], 'composer_candidates': []}]):
         assert skill.drag_divider((.3, .4), (.4, .4))['success'] is True
+
+
+@pytest.mark.parametrize('click_error', [False, True])
+def test_moments_click_keeps_foreground_and_restores_driver_policy(
+        mock_app, config, session, click_error):
+    skill = BasicSkill(mock_app, config, session)
+    skill._vision_auto = MagicMock()
+    skill._keyboard_only_auto = MagicMock()
+    skill.keyboard_only.foreground_mode = 'restore'
+    skill.vision.observe_page.return_value = {'ok': True, 'boxes': [
+        {'text': '朋友圈', 'score': .99, 'x': 200, 'y': 100, 'w': 60, 'h': 20}],
+        'state': {'page': 'discover', 'size': [1000, 800],
+                  'region_bounds': {'conversation_list': [.1, 0, .5, 1]}}}
+    mock_app.list_windows.return_value = [
+        {'hwnd': mock_app.handle, 'is_main': True, 'class': 'Qt'}]
+    def click(*point):
+        assert skill.keyboard_only.foreground_mode == 'leave'
+        if click_error:
+            raise RuntimeError('Click failed')
+    skill.keyboard_only.click_window_fraction.side_effect = click
+    with patch('wechat_auto.actions.basic.time.sleep'), \
+         patch('wechat_auto.primitives.vision.VisionAutomation') as observer:
+        observer.return_value.observe_page.return_value = {
+            'ok': True, 'state': {'page': 'moments_feed'}}
+        if click_error:
+            with pytest.raises(RuntimeError, match='Click failed'):
+                skill.page_operation('open_moments')
+        else:
+            assert skill.page_operation('open_moments')['success']
+    assert skill.keyboard_only.foreground_mode == 'restore'

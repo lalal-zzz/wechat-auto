@@ -3,13 +3,14 @@ import argparse
 import json
 import sys
 from pathlib import Path
+
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/"src"))
+from wechat_auto.memory.analysis import AnalysisService
+from wechat_auto.memory.indexer import message_period
+from wechat_auto.memory.markdown import MarkdownMemory
+from wechat_auto.memory.store import MemoryStore
 from wechat_auto.storage.history_store import HistoryStore
 from wechat_auto.storage.voice_transcription import VoiceTranscriptions
-from wechat_auto.memory.store import MemoryStore
-from wechat_auto.memory.analysis import AnalysisService
-from wechat_auto.memory.markdown import MarkdownMemory
-from wechat_auto.memory.indexer import message_period
 
 
 def main():

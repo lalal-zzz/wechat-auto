@@ -136,6 +136,14 @@ python -m pip install -r requirements-ocr.txt
 
 这些依赖文件对应各自集成，并非完整的一键 Windows 安装器。Win32 集成还需要相应 Python/运行时依赖。OCR 首次初始化可能下载模型，之后从本地缓存推理。
 
+如需本地语音转写，安装 `requirements-speech.txt` 并指定已有模型目录。若 Windows Conda 环境运行 CPU 转写时出现 `OMP: Error #15`，可在启动转写进程前于当前 PowerShell 会话设置 `$env:MKL_THREADING_LAYER = 'SEQUENTIAL'`，或者使用独立的语音环境。顺序线程层设置见 [Intel oneMKL Windows 文档](https://www.intel.com/content/www/us/en/docs/onemkl/developer-guide-windows/2026-0/dynamic-select-the-interface-and-threading-layer.html)。
+
+### 升级、回退与卸载
+
+1. 停止 MCP 客户端和项目的同步、分析、监控进程。记录启动参数中的数据库、Memory、密钥和导出路径。备份项目 SQLite 库、对应的 Memory 目录和 `data/analysis_sources.json`。若 SQLite 的 WAL 仍存在，使用 SQLite 备份接口或在所有连接关闭后将数据库与其 WAL 一并保存。
+2. 在单独的检出和 Python 环境安装新版依赖。先用备份副本启动离线 MCP，核对 `status.summary`、已发布 Markdown 版本及代表性归档，再将客户端指向新版。回退时恢复升级前的代码、依赖和整套数据副本。
+3. 卸载时先移除客户端中的 MCP 配置和已部署的项目 Skill，再删除专用 Python 环境与源码目录。若要清理私人数据，逐项核对并清理项目的归档库、Memory、截图、日志、导出、工作目录、来源清单与 `data/.secrets/`，包括启动参数指定的外部路径及不再需要的备份。保留需要留存的归档和备份。微信客户端及其 `xwechat_files` 由微信独立管理。
+
 ### 只读页面检查
 
 ```powershell
@@ -169,6 +177,12 @@ python -m wechat_auto.mcp_server `
 初始化索引证据和创建分析任务，不会自动产生人物结论或执行完整 LLM 分析。首次选择有效私聊前五和群聊前五，覆盖它们全部可用月份；后续通过增量依赖只更新受影响对象。
 
 由支持 MCP 的外部 Agent 连接 stdio 进程。服务不绑定特定大模型，外部模型的数据处理方式由其配置决定。需要操作已登录微信时才追加 `--with-wechat-runtime`；运行时工具具有额外依赖，完整稳定收件人发送仍待验收。
+
+运行时数据库使用本机 DPAPI 密钥，可用 `--secret-dir data/.secrets` 指定目录；微信或数据库依赖不可用时，`status.summary.runtime` 提供启动诊断，可用的离线工具继续保留。
+
+分析进程中断留下未登记正文时，可调用 `memory.recover_publication`：候选保留于本机 `data/work/analysis/`，只恢复已登记版本，不将候选或运行状态改为成功。
+
+直接使用 `DatabaseConversationBackend` 或 `DatabaseMomentsBackend` 时，默认也从 DPAPI 打开本地数据库；请使用 `with` 或显式 `close()` 释放工作副本。传入自有 `db` 时，连接仍由调用方关闭。
 
 工具分组：sync.*、entities.*、claims.*、events.*、analysis.*、memory.*、evidence.*、charts.*、monitor.*、reply.*、actions.*、vision.*、status.*。实际可用工具取决于注入的后端和运行时组件。
 

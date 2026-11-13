@@ -68,3 +68,20 @@ def test_ensure_contacts_clicks_only_collapsed_contacts_expander(mock_app, confi
     with patch('wechat_auto.actions.basic.time.sleep'):
         assert skill.ensure_contacts_section()['success']
     skill.keyboard_only.click_window_fraction.assert_called_once_with(.12, .45)
+
+
+@pytest.mark.parametrize('direction', ['expanded', 'collapsed'])
+@pytest.mark.parametrize('scale', [1, 1.5])
+def test_heading_ocr_box_may_overlap_chevron_right_wing(direction, scale):
+    image, boxes, state = sample(direction, scale)
+    boxes[2]['x'] = (128 if direction == 'expanded' else 124)*scale
+    result = observe_contact_section(image, boxes, state)
+    assert result['ok'] and result['state'] == direction
+
+
+def test_expanded_crop_still_rejects_two_chevrons():
+    image, boxes, state = sample()
+    pixels = np.asarray(image).copy()
+    cv2.polylines(pixels, [np.array([(136, 355), (141, 365), (146, 355)], dtype='int32')],
+                  False, (190, 190, 190), 3)
+    assert not observe_contact_section(Image.fromarray(pixels), boxes, state)['ok']

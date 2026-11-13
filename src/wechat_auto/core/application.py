@@ -24,6 +24,14 @@ WS_MAXIMIZEBOX = 0x00010000
 WS_SYSMENU = 0x00080000
 
 
+class _GuiThreadInfo(ctypes.Structure):
+    _fields_ = [("cbSize", wt.DWORD), ("flags", wt.DWORD),
+                ("hwndActive", wt.HWND), ("hwndFocus", wt.HWND),
+                ("hwndCapture", wt.HWND), ("hwndMenuOwner", wt.HWND),
+                ("hwndMoveSize", wt.HWND), ("hwndCaret", wt.HWND),
+                ("rcCaret", wt.RECT)]
+
+
 class Application:
     """Find and manage the supported Weixin 4.x top-level HWND."""
 
@@ -127,6 +135,47 @@ class Application:
                 "enabled": bool(user32.IsWindowEnabled(hwnd)),
                 "minimized": bool(user32.IsIconic(hwnd)),
                 "is_main": int(hwnd) == self.handle}
+
+    def focused_caret_rect(self) -> list[int] | None:
+        """Observe the focused Win32 caret in window-image coordinates.
+
+        A shared Qt HWND does not identify an editor. Absence of a public
+        caret is unknown, never permission to type into an assumed editor.
+        """
+        self._expected_process_id()
+        hwnd = self.handle
+        before = self.describe_window(hwnd)
+        if (user32.GetForegroundWindow() != hwnd or not before['visible']
+                or not before['enabled'] or before['minimized']):
+            return None
+        info = _GuiThreadInfo()
+        info.cbSize = ctypes.sizeof(info)
+        thread = user32.GetWindowThreadProcessId(hwnd, None)
+        if not thread or not user32.GetGUIThreadInfo(thread, ctypes.byref(info)):
+            return None
+        for target in (info.hwndFocus, info.hwndCaret):
+            if not target or (target != hwnd and not user32.IsChild(hwnd, target)):
+                return None
+            if self.window_process_id(target) != before['pid']:
+                return None
+        if info.rcCaret.right <= info.rcCaret.left or info.rcCaret.bottom <= info.rcCaret.top:
+            return None
+        points = [wt.POINT(info.rcCaret.left, info.rcCaret.top),
+                  wt.POINT(info.rcCaret.right, info.rcCaret.bottom)]
+        if not all(user32.ClientToScreen(info.hwndCaret, ctypes.byref(p)) for p in points):
+            return None
+        current = _GuiThreadInfo()
+        current.cbSize = ctypes.sizeof(current)
+        if (not user32.GetGUIThreadInfo(thread, ctypes.byref(current))
+                or (current.hwndFocus, current.hwndCaret) != (info.hwndFocus, info.hwndCaret)
+                or tuple(getattr(current.rcCaret, k) for k in ('left', 'top', 'right', 'bottom'))
+                != tuple(getattr(info.rcCaret, k) for k in ('left', 'top', 'right', 'bottom'))):
+            return None
+        if self.describe_window(hwnd) != before or user32.GetForegroundWindow() != hwnd:
+            return None
+        left, top = before['rect'][:2]
+        return [points[0].x - left, points[0].y - top,
+                points[1].x - left, points[1].y - top]
 
     def for_window(self, hwnd: int) -> Application:
         """Bind an auxiliary HWND only after checking the connected process."""

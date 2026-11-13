@@ -211,7 +211,7 @@ class DashboardBuilder:
         height = max(260, 120 + len(events) * 72)
         image = Image.new("RGB", (width, height), "#0f172a")
         draw = ImageDraw.Draw(image)
-        font_path = Path("C:/Windows/Fonts/msyh.ttc")
+        font_path = Path(os.environ.get("SystemRoot", "")) / "Fonts" / "msyh.ttc"
         font = ImageFont.truetype(str(font_path), 22) if font_path.is_file() else ImageFont.load_default()
         small = ImageFont.truetype(str(font_path), 16) if font_path.is_file() else ImageFont.load_default()
         draw.text((40, 30), "微信长期事件时间线", fill="#e2e8f0", font=font)

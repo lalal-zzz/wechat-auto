@@ -25,7 +25,9 @@ def observe_contact_section(image, boxes: list[dict], state: dict) -> dict:
     left = round(bounds[0]*width)
     top = max(0, round(header['y'] - header['h']*.25))
     bottom = min(height, round(header['y'] + header['h']*1.25))
-    right = round(header['x'])
+    # OCR may include the chevron's right wing in the heading box. Keep
+    # that wing, but only accept contour centers left of the heading.
+    right = min(width, round(header['x'] + header['h']*.5))
     if right <= left or bottom <= top:
         return {'ok': False, 'error': 'contacts_expander_unavailable'}
     gray = np.asarray(image.convert('RGB'))[top:bottom, left:right].mean(axis=2)
@@ -33,6 +35,8 @@ def observe_contact_section(image, boxes: list[dict], state: dict) -> dict:
     candidates = []
     for contour in cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)[0]:
         x, y, w, h = cv2.boundingRect(contour)
+        if left+x+w/2 >= header['x'] or x+w >= binary.shape[1]:
+            continue
         if not 7 <= min(w, h) or max(w, h) > header['h']*1.6:
             continue
         mask = binary[y:y+h, x:x+w] != 0

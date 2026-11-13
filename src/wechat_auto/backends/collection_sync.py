@@ -26,7 +26,47 @@ def profile_changed(previous, profile):
 
 
 def refresh(db, *, profiles_path, moments_path, memory_path, output):
-    """Source reads are complete before writes; historical archive rows stay intact."""
+    """Refresh local stores with a phase receipt; this is not a cross-store transaction."""
+    run_id = 'full_' + uuid.uuid4().hex[:12]
+    folder = Path(output) / run_id
+    folder.mkdir(parents=True, exist_ok=False)
+    state = {'run_id': run_id, 'status': 'running', 'stage': 'source_read',
+             'completed_stages': [], 'may_have_partial_writes': False}
+
+    def persist():
+        state['updated_at'] = datetime.now(timezone.utc).isoformat()
+        temporary = folder / 'run_status.json.tmp'
+        temporary.write_text(json.dumps(state, indent=2), encoding='utf-8')
+        temporary.replace(folder / 'run_status.json')
+
+    def checkpoint(stage):
+        if stage != state['stage']:
+            state['completed_stages'].append(state['stage'])
+        state['stage'] = stage
+        state['may_have_partial_writes'] = stage != 'source_read'
+        persist()
+
+    try:
+        persist()
+        result = _refresh(db, profiles_path=profiles_path, moments_path=moments_path,
+                          memory_path=memory_path, run_id=run_id, folder=folder, checkpoint=checkpoint)
+        state['completed_stages'].append(state['stage'])
+        state.update(status='completed', may_have_partial_writes=False)
+        persist()
+        return result
+    except BaseException as error:
+        state.update(status='failed', error_type=type(error).__name__,
+                     may_have_partial_writes=state['stage'] != 'source_read')
+        try:
+            persist()
+        except OSError:
+            if hasattr(error, 'add_note'):
+                error.add_note('Refresh failure receipt could not be saved.')
+        raise
+
+
+def _refresh(db, *, profiles_path, moments_path, memory_path, run_id, folder, checkpoint):
+    """Source reads precede archive writes; each store retains its own transactions."""
     started = time.monotonic()
     # local_type varies across client versions; full archival must not
     # silently discard real people using an unverified type=3 assumption.
@@ -36,12 +76,10 @@ def refresh(db, *, profiles_path, moments_path, memory_path, output):
     usernames = {p['wechat_id'] for p in profiles}
     all_feeds = DatabaseMomentsBackend(db).read_all_available()
     feeds = [feed for feed in all_feeds if feed.get('username') in usernames]
-    run_id = 'full_' + uuid.uuid4().hex[:12]
-    folder = Path(output) / run_id
-    folder.mkdir(parents=True, exist_ok=False)
     changed_profiles = 0
     changed_moments = []
     manifest = []
+    checkpoint('profile_archive')
     with ProfileStore(profiles_path) as archive:
         for profile in profiles:
             previous = archive.get(profile['wechat_id'])
@@ -57,6 +95,7 @@ def refresh(db, *, profiles_path, moments_path, memory_path, output):
             if profile_changed(previous, profile):
                 archive.save(profile, profile_type='contact')
                 changed_profiles += 1
+    checkpoint('moment_archive')
     with MomentStore(moments_path) as archive:
         for feed in feeds:
             ident = str(feed.get('id') or feed.get('tid') or '')
@@ -64,16 +103,27 @@ def refresh(db, *, profiles_path, moments_path, memory_path, output):
                 raise ValueError('Moment has no stable identity')
             current = archive._connection.execute('SELECT raw_json FROM moments WHERE id=?', (ident,)).fetchone()
             if current is None or json.loads(current[0]) != feed:
-                archive.save([feed])
                 changed_moments.append(feed)
             for kind, key in (('image', 'images'), ('video', 'videos')):
-                for index, media in enumerate(feed.get(key) or []):
+                entries = feed.get(key)
+                if entries is None:
+                    entries = []
+                if not isinstance(entries, (list, tuple)):
+                    raise TypeError('Moment media entries must be a sequence of records')
+                for index, media in enumerate(entries):
+                    if not isinstance(media, dict):
+                        raise TypeError('Moment media entry must be a dictionary')
                     fingerprint = hashlib.sha256(json.dumps(
                         [ident, kind, index, media], sort_keys=True, ensure_ascii=False).encode()).hexdigest()
                     manifest.append({'item_id': fingerprint, 'moment_id': ident,
                                      'username': feed['username'], 'kind': kind, 'index': index,
                                      'media': media, 'status': 'pending_confirmation' if media.get('url') else 'unavailable',
                                      'downloaded': False, 'requires_confirmation': True})
+        # Validation/planning above must finish before any Moment is committed.
+        # Store.save also checks all identities in one atomic batch, so a later
+        # author collision cannot leave earlier Moments partially refreshed.
+        archive.save(feeds)
+    checkpoint('memory_index')
     with MemoryStore(memory_path) as memory:
         indexer = ArchiveIndexer(memory)
         snapshots = indexer.index_profile_snapshots(profiles_path)
@@ -96,6 +146,7 @@ def refresh(db, *, profiles_path, moments_path, memory_path, output):
             memory.mark_dirty('person', person, 'moment_refresh', str(feed.get('id') or feed.get('tid')))
             memory.enqueue_job('person_analysis', 'person', person, priority=40)
         indexed = indexer.index_moments(moments_path)
+    checkpoint('output_write')
     with (folder / 'media_manifest.jsonl').open('w', encoding='utf-8') as file:
         for item in manifest:
             file.write(json.dumps(item, ensure_ascii=False) + '\n')

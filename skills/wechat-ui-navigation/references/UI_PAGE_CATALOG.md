@@ -1,6 +1,6 @@
 # 微信界面枚举与识别覆盖
 
-更新时间：2026-10-01。页面目录版本：3。目录源为 `src/wechat_auto/primitives/page_catalog.py`，项目页面编号源为 `actions/semantics.py`。
+更新时间：2026-10-01。页面目录版本：5。目录源为 `src/wechat_auto/primitives/page_catalog.py`，项目页面编号源为 `actions/semantics.py`。
 
 ## 使用规则
 
@@ -8,7 +8,7 @@
 - 一帧返回底层 page、page_candidates、panels、overlays 和 content_windows；辅助窗口另行采样。主窗右侧标签不能抹掉中央聊天状态，独立弹窗也不能当成主窗内容。
 - 同一种内容可为中央嵌入、右侧标签或独立窗口。catalog 的 presentations 声明候选形态，实际需结合 HWND 与当前截图识别。
 - 多数规则识别使用多个独立文字组；同一组中的词是备选，组与组必须全部满足。输出保留候选，不自动点击。
-- 目录共 49 类；本机实际采样覆盖 16 类页面状态，其他界面与环境仍待验收。实机动作结果见 [ACTION_VERIFICATION_MATRIX.md](ACTION_VERIFICATION_MATRIX.md)。
+- 目录共 51 类；目录存在不代表动作已实机验收，具体页面与环境范围须另行核对。实机动作结果见 [ACTION_VERIFICATION_MATRIX.md](ACTION_VERIFICATION_MATRIX.md)。
 - 群聊身份需要用稳定 @chatroom ID 校验，不能仅靠标题或人数识别。
 - template_required 表示已枚举但尚无可靠文字规则，需边缘/图标模板、窗口类型及当前帧布局测量。
 - 浅色、深色、DPI 和尺寸变化是每种页面都要覆盖的验证维度。
@@ -97,3 +97,7 @@ python scripts\recognize_wechat_page.py --image data\ocr\latest\capture.png
 ```
 
 MCP `vision.page_catalog` 不依赖微信运行时；`vision.observe_page` 需要真实 BasicSkill/窗口观察器。新页面只需追加目录和识别规则，不复用已分配 ID。
+
+输入区右键菜单（28，`composer_menu`）：独立overlay，须同时观察“粘贴”和“边写边译”；不以单独“粘贴”证明页面。只登记中性dismiss，不登记发送或通用未知窗关闭。
+
+输入区选择菜单（29，`composer_selection_menu`）：文件形态观察“剪切、复制、粘贴、删除”，图片形态观察“剪切、复制、另存为、编辑”（允许另存为省略号OCR变体）；通用页面接口只登记中性dismiss，不能调用通用复制/剪切/删除。是否为附件及其身份必须由专用来源与当前帧另核对。

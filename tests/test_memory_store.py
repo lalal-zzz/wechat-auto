@@ -1,9 +1,34 @@
 import sqlite3
 from datetime import datetime, timedelta, timezone
+from unittest.mock import patch
 
 import pytest
 
 from wechat_auto.memory import MemoryStore
+
+
+def test_analysis_scope_status_reports_recorded_upstream_work(tmp_path):
+    with MemoryStore(tmp_path / "memory.sqlite3") as store:
+        store.add_dependency("conversation_month", "chat:2026-09", "conversation", "chat")
+        store.add_dependency("conversation", "chat", "person", "person")
+        store.add_dependency("person", "person", "conversation", "chat")
+        store.record_version("conversation", "chat", "2026-09", content_hash="hash",
+                             markdown_path="test.md", input_fingerprint="input")
+        store.update_coverage("conversation", "chat", "2026-09", message_watermark="old")
+        store.mark_dirty("conversation_month", "chat:2026-09", "new_message", "new")
+        job = store.enqueue_job("monthly_analysis", "conversation", "chat", period="2026-09")
+        store.complete_job(job, success=False)
+        store.enqueue_job("monthly_analysis", "conversation", "chat", period="2026-10")
+
+        nodes = {item["node_id"]: item for item in store.analysis_scope_status("person", "person")}
+
+        assert set(nodes) == {"person", "chat", "chat:2026-09"}
+        assert nodes["person"]["version"] is None
+        month = nodes["chat:2026-09"]
+        assert month["version"] == 1
+        assert month["message_watermark"] == "old"
+        assert month["dirty"][0]["source_id"] == "new"
+        assert [(item["job_id"], item["status"]) for item in month["jobs"]] == [(job, "failed")]
 
 
 def test_memory_store_rejects_incompatible_schema(tmp_path):
@@ -13,6 +38,39 @@ def test_memory_store_rejects_incompatible_schema(tmp_path):
         connection.execute("INSERT INTO schema_meta VALUES('schema_version', '999')")
     with pytest.raises(RuntimeError, match="Unsupported Memory schema 999"):
         MemoryStore(path)
+    with sqlite3.connect(path) as connection:
+        assert connection.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall() == [
+            ("schema_meta",)
+        ]
+        assert connection.execute("PRAGMA journal_mode").fetchone()[0] == "delete"
+
+
+def test_locked_memory_initialization_closes_connection_and_recovers(tmp_path):
+    path = tmp_path / 'memory.sqlite3'
+    with MemoryStore(path) as owner:
+        owner.ensure_person('wxid_test_existing')
+        owner._connection.execute('BEGIN EXCLUSIVE')
+        original_connect = sqlite3.connect
+        attempted = []
+
+        def connect(*args, **kwargs):
+            kwargs['timeout'] = 0
+            connection = original_connect(*args, **kwargs)
+            attempted.append(connection)
+            return connection
+
+        try:
+            with patch('wechat_auto.memory.store.sqlite3.connect', side_effect=connect), pytest.raises(
+                sqlite3.OperationalError, match='locked'
+            ):
+                MemoryStore(path)
+        finally:
+            owner._connection.rollback()
+        assert len(attempted) == 1
+        with pytest.raises(sqlite3.ProgrammingError, match='closed'):
+            attempted[0].execute('SELECT 1')
+    with MemoryStore(path) as recovered:
+        assert recovered.database_summary()['people'] == 1
 
 
 @pytest.mark.parametrize('old_version', [1, 2])
@@ -99,7 +157,15 @@ def test_analysis_jobs_are_idempotent_for_same_input(tmp_path):
         store.complete_job(first, success=True)
         assert store.enqueue_job("monthly_analysis", "conversation", "cv1",
                                  period="2026-09", input_fingerprint="abc") == first
-        assert store.next_jobs()[0]["job_id"] == first
+        assert store.next_jobs() == []
+        revised = store.enqueue_job("monthly_analysis", "conversation", "cv1",
+                                    period="2026-09", input_fingerprint="def")
+        assert revised != first
+        assert store.claim_next_job()["job_id"] == revised
+        store.complete_job(revised, success=False)
+        assert store.enqueue_job("monthly_analysis", "conversation", "cv1",
+                                 period="2026-09", input_fingerprint="def") == revised
+        assert store.claim_next_job()["attempts"] == 2
 
 
 def test_dirty_dependencies_propagate_recursively(tmp_path):
@@ -136,6 +202,18 @@ def test_identity_merge_requires_candidate_decision_and_preserves_alias(tmp_path
             "SELECT person_id FROM person_aliases WHERE alias_value='旧昵称'"
         ).fetchone()
         assert alias[0] == left
+
+
+def test_scoped_job_claim_does_not_fall_back_to_another_month(tmp_path):
+    with MemoryStore(tmp_path / "memory.sqlite3") as store:
+        wanted = store.enqueue_job("monthly_analysis", "conversation", "chat", period="2026-09")
+        other = store.enqueue_job("monthly_analysis", "conversation", "chat", period="2026-10",
+                                  priority=100)
+        scope = ("conversation", "chat", "2026-09")
+        assert store.claim_next_job(job_id=other, scope=scope) is None
+        assert store.claim_next_job(scope=scope)["job_id"] == wanted
+        assert store.claim_next_job(scope=scope) is None
+        assert store.claim_next_job()["job_id"] == other
 
 
 def test_exact_job_claim_does_not_take_unrelated_high_priority_job(tmp_path):

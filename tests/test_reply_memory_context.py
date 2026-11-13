@@ -1,9 +1,11 @@
-from pathlib import Path
 import sqlite3
+from pathlib import Path
+
 import pytest
-from wechat_auto.memory.store import MemoryStore
-from wechat_auto.memory.markdown import MarkdownMemory
+
 from wechat_auto.memory.context import ContextBuilder
+from wechat_auto.memory.markdown import MarkdownMemory
+from wechat_auto.memory.store import MemoryStore
 
 
 def setup_context(tmp_path):
@@ -32,7 +34,7 @@ def setup_context(tmp_path):
 
 
 def test_formal_memory_and_pending_pages_include_last_day(tmp_path):
-    store, memory, cv, builder = setup_context(tmp_path)
+    store, _memory, cv, builder = setup_context(tmp_path)
     try:
         result = builder.reply_context(cv, [{"content": "latest"}], pending_limit=1)
         assert len(result["memory_sources"]) == 4
@@ -50,7 +52,7 @@ def test_formal_memory_and_pending_pages_include_last_day(tmp_path):
 
 
 def test_tampered_memory_and_foreign_person_fail(tmp_path):
-    store, memory, cv, builder = setup_context(tmp_path)
+    store, _memory, cv, builder = setup_context(tmp_path)
     try:
         outsider = store.ensure_person("outsider")
         with pytest.raises(ValueError, match="active member"):

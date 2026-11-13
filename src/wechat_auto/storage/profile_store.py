@@ -6,6 +6,8 @@ import json
 import sqlite3
 from pathlib import Path
 
+from wechat_auto.utils.profile_reference import profile_content_hash
+
 
 class ProfileStore:
     """Store profile text and media references without downloading media."""
@@ -14,6 +16,17 @@ class ProfileStore:
         self.path = Path(path).expanduser().resolve()
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._connection = sqlite3.connect(self.path)
+        try:
+            self._initialize()
+        except BaseException:
+            try:
+                self._connection.rollback()
+            finally:
+                self._connection.close()
+            raise
+
+    def _initialize(self) -> None:
+        self._connection.execute("BEGIN IMMEDIATE")
         self._connection.execute("""
             CREATE TABLE IF NOT EXISTS profiles (
                 profile_type TEXT NOT NULL, wechat_id TEXT NOT NULL,
@@ -75,6 +88,7 @@ class ProfileStore:
                 updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
             )
         """)
+        self._initialize_group_scopes()
         self._connection.commit()
 
     def _ensure_columns(self, table: str, columns: dict[str, str]) -> None:
@@ -82,6 +96,104 @@ class ProfileStore:
         for name, definition in columns.items():
             if name not in existing:
                 self._connection.execute(f"ALTER TABLE {table} ADD COLUMN {name} {definition}")
+
+    @staticmethod
+    def _group_id(value) -> str:
+        if (not isinstance(value, str) or not value.strip().endswith('@chatroom')
+                or len(value.strip()) <= len('@chatroom')):
+            raise PermissionError('Group-scoped profile access requires a stable group_id')
+        return value.strip()
+
+    def _initialize_group_scopes(self) -> None:
+        self._connection.execute("""CREATE TABLE IF NOT EXISTS group_profile_versions (
+            snapshot_id INTEGER PRIMARY KEY, group_id TEXT NOT NULL,
+            wechat_id TEXT NOT NULL, scope_status TEXT NOT NULL
+        )""")
+        self._connection.execute("""CREATE INDEX IF NOT EXISTS idx_group_profile_versions_scope
+            ON group_profile_versions(group_id,wechat_id,snapshot_id)""")
+        self._connection.execute("""CREATE TABLE IF NOT EXISTS group_profile_current (
+            group_id TEXT NOT NULL, wechat_id TEXT NOT NULL, snapshot_id INTEGER NOT NULL,
+            PRIMARY KEY(group_id,wechat_id)
+        )""")
+        self._connection.execute("""CREATE TABLE IF NOT EXISTS group_profile_meta (
+            key TEXT PRIMARY KEY, value TEXT NOT NULL
+        )""")
+        if self._connection.execute("SELECT 1 FROM group_profile_meta WHERE key='scope_index_v1'").fetchone():
+            return
+        indexed = skipped = 0
+        for snapshot_id, username, text in self._connection.execute("""
+            SELECT snapshot_id,wechat_id,profile_json FROM profile_snapshots
+            WHERE profile_type='group_member' ORDER BY snapshot_id
+        """).fetchall():
+            try:
+                profile = json.loads(text)
+                group_id = self._group_id(profile.get('group_id'))
+                if not isinstance(username, str) or not username or profile.get('wechat_id') != username:
+                    raise ValueError('Legacy identity is not scoped')
+            except (ValueError, TypeError, AttributeError, PermissionError):
+                skipped += 1
+                continue
+            self._connection.execute('INSERT INTO group_profile_versions VALUES(?,?,?,?)',
+                                     (snapshot_id, group_id, username, 'legacy_unverified'))
+            self._connection.execute("""INSERT INTO group_profile_current VALUES(?,?,?)
+                ON CONFLICT(group_id,wechat_id) DO UPDATE SET snapshot_id=excluded.snapshot_id""",
+                                     (group_id, username, snapshot_id))
+            indexed += 1
+        self._connection.execute('INSERT INTO group_profile_meta VALUES(?,?)',
+                                 ('scope_index_v1', json.dumps({'indexed': indexed, 'skipped': skipped})))
+
+    def _save_group_member(self, profile: dict, *, expected_group: str | None = None) -> dict:
+        group_id = self._group_id(profile.get('group_id'))
+        username = profile.get('wechat_id')
+        if not isinstance(username, str) or not username.strip() or username.strip().endswith('@chatroom'):
+            raise ValueError('Group member requires a stable person id')
+        username = username.strip()
+        for key in ('wxid', 'username', 'user_name'):
+            value = profile.get(key)
+            if value not in (None, '') and (not isinstance(value, str) or value.strip() != username):
+                raise ValueError('Conflicting group member identity fields')
+        if profile.get('chatroom_id') not in (None, '', group_id):
+            raise ValueError('Conflicting group membership scope')
+        if profile.get('is_owner') is not None and not isinstance(profile['is_owner'], bool):
+            raise TypeError('Stored group owner flag must be a normalized boolean or unknown')
+        if expected_group is not None and group_id != expected_group:
+            raise ValueError('Group member belongs to a different archive scope')
+        current = self.get(username, profile_type='group_member', group_id=group_id)
+        trusted = current is not None and current['verification_status'] == 'observed_scoped'
+        fields = ('nickname', 'remark', 'signature', 'alias', 'group_display_name', 'is_owner',
+                  'avatar', 'avatar_md5', 'background_image')
+        changes = [(field, '' if not trusted else str(current.get(field, '') if current.get(field) is not None else ''),
+                    str(profile.get(field, '') if profile.get(field) is not None else '')) for field in fields]
+        changes = [change for change in changes if change[1] != change[2]]
+        payload = {**profile, 'wechat_id': username, 'group_id': group_id, 'profile_type': 'group_member'}
+        payload.pop('verification_status', None)
+        source = str(profile.get('source') or 'unknown')
+        cursor = self._connection.execute("""INSERT INTO profile_snapshots
+            (profile_type,wechat_id,profile_json,source) VALUES('group_member',?,?,?)""",
+            (username, json.dumps(payload, ensure_ascii=False, sort_keys=True), source))
+        snapshot_id = int(cursor.lastrowid)
+        scope = 'scoped' if trusted else 'scoped_baseline'
+        self._connection.execute('INSERT INTO group_profile_versions VALUES(?,?,?,?)',
+                                 (snapshot_id, group_id, username, scope))
+        self._connection.execute("""INSERT INTO group_profile_current VALUES(?,?,?)
+            ON CONFLICT(group_id,wechat_id) DO UPDATE SET snapshot_id=excluded.snapshot_id""",
+                                 (group_id, username, snapshot_id))
+        self._connection.executemany("""INSERT INTO profile_changes
+            (profile_type,wechat_id,field_name,old_value,new_value,source,snapshot_id)
+            VALUES('group_member',?,?,?,?,?,?)""",
+            [(username, field, old, new, source, snapshot_id) for field, old, new in changes])
+        return {'profile_type': 'group_member', 'wechat_id': username, 'group_id': group_id,
+                'snapshot_id': snapshot_id, 'changed_fields': [item[0] for item in changes],
+                'comparison_scope': scope}
+
+    def save_group_members(self, profiles: list[dict], *, group_id: str) -> list[dict]:
+        group_id = self._group_id(group_id)
+        identities = [profile.get('wechat_id').strip() if isinstance(profile.get('wechat_id'), str)
+                      else None for profile in profiles]
+        if any(not isinstance(identity, str) for identity in identities) or len(set(identities)) != len(identities):
+            raise ValueError('Group archive member identities must be unique text')
+        with self._connection:
+            return [self._save_group_member(profile, expected_group=group_id) for profile in profiles]
 
     def close(self) -> None:
         self._connection.close()
@@ -93,6 +205,9 @@ class ProfileStore:
         self.close()
 
     def save(self, profile: dict, *, profile_type: str) -> dict:
+        if profile_type == "group_member":
+            with self._connection:
+                return self._save_group_member(profile)
         if profile_type not in {"self", "contact", "group_member"}:
             raise ValueError("profile_type must be 'self', 'contact' or 'group_member'")
         wechat_id = str(profile.get("wechat_id", "")).strip()
@@ -153,7 +268,19 @@ class ProfileStore:
         return {"profile_type": profile_type, "wechat_id": wechat_id,
                 "snapshot_id": snapshot_id, "changed_fields": [item[0] for item in changed]}
 
-    def get(self, wechat_id: str, *, profile_type: str = "contact") -> dict | None:
+    def get(self, wechat_id: str, *, profile_type: str = "contact", group_id: str | None = None) -> dict | None:
+        if profile_type == 'group_member':
+            group_id = self._group_id(group_id)
+            row = self._connection.execute("""SELECT s.profile_json,s.captured_at,v.scope_status
+                FROM group_profile_current c JOIN profile_snapshots s ON s.snapshot_id=c.snapshot_id
+                JOIN group_profile_versions v ON v.snapshot_id=s.snapshot_id
+                WHERE c.group_id=? AND c.wechat_id=?""", (group_id, wechat_id)).fetchone()
+            if row is None:
+                return None
+            profile = json.loads(row[0])
+            profile['updated_at'] = row[1]
+            profile['verification_status'] = 'legacy_unverified' if row[2] == 'legacy_unverified' else 'observed_scoped'
+            return profile
         row = self._connection.execute("""
             SELECT profile_type,wechat_id,name,nickname,remark,signature,alias,original_name,
                    display_name,nickname_prefix,nickname_core,nickname_suffix,group_id,
@@ -201,17 +328,26 @@ class ProfileStore:
         result = self.save(profile, profile_type='contact')
         return {**result, 'changed_fields': changed, 'snapshot_created': True}
 
-    def history(self, wechat_id: str, *, profile_type: str = "contact", limit: int = 100) -> list[dict]:
+    def history(self, wechat_id: str, *, profile_type: str = "contact", limit: int = 100,
+                group_id: str | None = None) -> list[dict]:
         if limit <= 0:
             raise ValueError("limit must be positive")
-        rows = self._connection.execute("""
-            SELECT snapshot_id,captured_at,profile_json,source
-            FROM profile_snapshots
-            WHERE profile_type=? AND wechat_id=?
-            ORDER BY snapshot_id DESC LIMIT ?
-        """, (profile_type, wechat_id, limit)).fetchall()
-        return [{"snapshot_id": row[0], "captured_at": row[1],
-                 "profile": json.loads(row[2]), "source": row[3]} for row in rows]
+        if group_id is not None:
+            if profile_type != 'group_member':
+                raise ValueError('Group scope requires group_member profile type')
+            group_id = self._group_id(group_id)
+            rows = self._connection.execute("""SELECT s.snapshot_id,s.captured_at,s.profile_json,s.source,v.scope_status
+                FROM profile_snapshots s JOIN group_profile_versions v ON v.snapshot_id=s.snapshot_id
+                WHERE s.profile_type=? AND s.wechat_id=? AND v.group_id=?
+                ORDER BY s.snapshot_id DESC LIMIT ?""", (profile_type, wechat_id, group_id, limit)).fetchall()
+        else:
+            rows = self._connection.execute("""SELECT s.snapshot_id,s.captured_at,s.profile_json,s.source,v.scope_status
+                FROM profile_snapshots s LEFT JOIN group_profile_versions v ON v.snapshot_id=s.snapshot_id
+                WHERE s.profile_type=? AND s.wechat_id=? ORDER BY s.snapshot_id DESC LIMIT ?""",
+                (profile_type, wechat_id, limit)).fetchall()
+        return [{'snapshot_id': row[0], 'captured_at': row[1], 'profile': json.loads(row[2]), 'source': row[3],
+                 **({'comparison_scope': row[4] or 'legacy_unverified'} if profile_type == 'group_member' else {})}
+                for row in rows]
 
     def snapshot_by_id(self, snapshot_id: str | int) -> dict | None:
         row = self._connection.execute("""
@@ -220,12 +356,28 @@ class ProfileStore:
         """, (snapshot_id,)).fetchone()
         if row is None:
             return None
+        scope = self._connection.execute("SELECT scope_status FROM group_profile_versions WHERE snapshot_id=?",
+                                         (row[0],)).fetchone() if row[1] == "group_member" else None
         return {"snapshot_id": row[0], "profile_type": row[1], "wechat_id": row[2],
-                "captured_at": row[3], "profile": json.loads(row[4]), "source": row[5]}
+                "captured_at": row[3], "profile": json.loads(row[4]), "source": row[5],
+                "content_hash": profile_content_hash(dict(zip(("snapshot_id", "profile_type", "wechat_id", "captured_at", "profile_json", "source"), row))),
+                **({"comparison_scope": scope[0] if scope else "legacy_unverified"}
+                   if row[1] == "group_member" else {})}
 
-    def changes(self, wechat_id: str, *, profile_type: str = "contact", limit: int = 100) -> list[dict]:
+    def changes(self, wechat_id: str, *, profile_type: str = "contact", limit: int = 100,
+                group_id: str | None = None) -> list[dict]:
         if limit <= 0:
             raise ValueError("limit must be positive")
+        if profile_type == 'group_member':
+            group_id = self._group_id(group_id)
+            rows = self._connection.execute("""SELECT c.change_id,c.field_name,c.old_value,c.new_value,
+                c.detected_at,c.source,c.snapshot_id,v.scope_status
+                FROM profile_changes c JOIN group_profile_versions v ON v.snapshot_id=c.snapshot_id
+                WHERE c.profile_type=? AND c.wechat_id=? AND v.group_id=?
+                ORDER BY c.change_id DESC LIMIT ?""", (profile_type, wechat_id, group_id, limit)).fetchall()
+            return [{'change_id': row[0], 'field': row[1], 'old': row[2], 'new': row[3],
+                     'detected_at': row[4], 'source': row[5], 'snapshot_id': row[6],
+                     'comparison_scope': row[7]} for row in rows]
         rows = self._connection.execute("""
             SELECT change_id,field_name,old_value,new_value,detected_at,source,snapshot_id
             FROM profile_changes

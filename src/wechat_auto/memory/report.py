@@ -8,16 +8,15 @@ from __future__ import annotations
 import hashlib
 import os
 import re
+from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from html import escape
-from collections import defaultdict
 from pathlib import Path
 from urllib.parse import quote
 
 from wechat_auto.memory.dashboard import DashboardBuilder
 from wechat_auto.memory.markdown import MarkdownMemory
 from wechat_auto.memory.report_visuals import render_visuals
-
 
 _ICON_PATHS = {
     "search": '<circle cx="10.8" cy="10.8" r="6.8"/><path d="m16 16 5 5"/>',

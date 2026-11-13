@@ -23,6 +23,8 @@ from __future__ import annotations
 import logging
 import re
 import time
+from copy import copy, deepcopy
+from threading import RLock
 from typing import TYPE_CHECKING
 
 from wechat_auto.utils.screenshot import ScreenshotHelper
@@ -43,7 +45,8 @@ _RED_MIN_DOMINANCE = 50
 
 #: Module-level OCR engine singleton — model load costs ~1-2s and tens of
 #: MB, so all VisionAutomation instances share one engine.
-_OCR_ENGINES: dict[str, object] = {}
+_OCR_ENGINES: dict[tuple, object] = {}
+_OCR_LOAD_LOCK = RLock()
 _OCR_FAIL_WARNED = False
 
 
@@ -51,6 +54,7 @@ class _PaddleOCRAdapter:
     name = "paddleocr"
 
     def __init__(self, config):
+        self._inference_lock = RLock()
         from paddleocr import PaddleOCR
         self.engine = PaddleOCR(
             text_detection_model_name=getattr(config, "paddle_detection_model", "PP-OCRv5_mobile_det"),
@@ -61,54 +65,63 @@ class _PaddleOCRAdapter:
         )
 
     def __call__(self, image):
-        normalized = []
-        # Vision feeds RGB screenshots; Paddle's ndarray input uses BGR.
-        for output in self.engine.predict(input=image[:, :, ::-1].copy()):
-            payload = getattr(output, "json", output)
-            if callable(payload):
-                payload = payload()
-            if isinstance(payload, dict) and "res" in payload:
-                payload = payload["res"]
-            if not isinstance(payload, dict):
-                continue
-            texts = payload.get("rec_texts", ())
-            scores = payload.get("rec_scores", ())
-            polygons = payload.get("rec_polys", payload.get("dt_polys", ()))
-            for polygon, text, score in zip(polygons, texts, scores):
-                normalized.append([polygon, text, score])
-        return normalized, None
+        with self._inference_lock:
+            normalized = []
+            # Vision feeds RGB screenshots; Paddle's ndarray input uses BGR.
+            for output in self.engine.predict(input=image[:, :, ::-1].copy()):
+                payload = getattr(output, "json", output)
+                if callable(payload):
+                    payload = payload()
+                if isinstance(payload, dict) and "res" in payload:
+                    payload = payload["res"]
+                if not isinstance(payload, dict):
+                    continue
+                texts = payload.get("rec_texts", ())
+                scores = payload.get("rec_scores", ())
+                polygons = payload.get("rec_polys", payload.get("dt_polys", ()))
+                for polygon, text, score in zip(polygons, texts, scores):
+                    normalized.append([polygon, text, score])
+            return normalized, None
+
 
 
 class _RapidOCRAdapter:
     name = "rapidocr"
 
     def __init__(self):
+        self._inference_lock = RLock()
         from rapidocr_onnxruntime import RapidOCR
         self.engine = RapidOCR()
 
     def __call__(self, image):
-        return self.engine(image)
+        with self._inference_lock:
+            return self.engine(image)
 
 
 def _get_ocr_engine(config=None):
-    requested = str(getattr(config, "ocr_engine", "paddle") or "paddle").lower()
+    config = copy(config)
+    requested = str(getattr(config, "ocr_engine", "paddle") or "paddle").strip().lower()
     fallback = bool(getattr(config, "ocr_allow_rapid_fallback", True))
-    cache_key = requested + (":fallback" if fallback else "")
-    if cache_key in _OCR_ENGINES:
-        return _OCR_ENGINES[cache_key]
-    if requested == "paddle":
-        try:
-            engine = _PaddleOCRAdapter(config)
-        except (ImportError, ModuleNotFoundError):
-            if not fallback:
-                raise
-            engine = _RapidOCRAdapter()
-    elif requested == "rapid":
-        engine = _RapidOCRAdapter()
-    else:
+    if requested not in {'paddle', 'rapid'}:
         raise ValueError("ocr_engine must be 'paddle' or 'rapid'")
-    _OCR_ENGINES[cache_key] = engine
-    return engine
+    cache_key = ((requested, fallback,
+                  getattr(config, 'paddle_detection_model', 'PP-OCRv5_mobile_det'),
+                  getattr(config, 'paddle_recognition_model', 'PP-OCRv5_mobile_rec'))
+                 if requested == 'paddle' else (requested,))
+    with _OCR_LOAD_LOCK:
+        if cache_key in _OCR_ENGINES:
+            return _OCR_ENGINES[cache_key]
+        if requested == "paddle":
+            try:
+                engine = _PaddleOCRAdapter(config)
+            except (ImportError, ModuleNotFoundError):
+                if not fallback:
+                    raise
+                engine = _RapidOCRAdapter()
+        else:
+            engine = _RapidOCRAdapter()
+        _OCR_ENGINES[cache_key] = engine
+        return engine
 
 
 def _warn_ocr_failure(exc: Exception) -> None:
@@ -116,7 +129,7 @@ def _warn_ocr_failure(exc: Exception) -> None:
     global _OCR_FAIL_WARNED
     if not _OCR_FAIL_WARNED:
         _OCR_FAIL_WARNED = True
-        logger.warning("OCR unavailable (vision automation degraded): %s", exc)
+        logger.warning("OCR unavailable (vision automation degraded): %s", type(exc).__name__)
 
 
 def normalize_text(text: str) -> str:
@@ -446,6 +459,20 @@ class VisionAutomation:
             _warn_ocr_failure(exc)
             return []
 
+    def _ocr_frame_scope(self):
+        """Bind the one-frame OCR cache to fresh Win32 identity/geometry."""
+        if self._app is None:
+            return ('offline_image',)
+        try:
+            metadata = self._app.describe_window(self._app.handle)
+            keys = ('hwnd', 'pid', 'class', 'owner_hwnd', 'rect', 'client_rect', 'dpi')
+            if not isinstance(metadata, dict) or any(key not in metadata for key in keys):
+                return None
+            return tuple(tuple(metadata[key]) if isinstance(metadata[key], (list, tuple))
+                         else metadata[key] for key in keys)
+        except Exception:
+            return None
+
     def recognize_image(self, img: Image.Image, *,
                         region: tuple[int, int, int, int] | None = None,
                         window_size: tuple[int, int] | None = None,
@@ -457,8 +484,22 @@ class VisionAutomation:
 
         if upscale not in (1, 2, 3):
             raise ValueError('OCR upscale must be 1, 2 or 3')
-        source = img if upscale == 1 else img.resize((img.width*upscale,img.height*upscale))
-        result, _ = self._ocr(np.array(source.convert("RGB")))
+        scope = self._ocr_frame_scope()
+        engine = self._ocr
+        source = img if upscale == 1 else img.resize((img.width*upscale, img.height*upscale))
+        rgb = source.convert('RGB')
+        pixels = rgb.tobytes()
+        key = (scope, img.size, tuple(region) if region is not None else None,
+               tuple(window_size) if window_size is not None else None, upscale)
+        cached = getattr(self, '_ocr_frame_cache', None)
+        if (scope is not None and cached is not None and cached['engine'] is engine
+                and cached['key'] == key and cached['pixels'] == pixels
+                and self._ocr_frame_scope() == scope):
+            self._ocr_cache_hits = getattr(self, '_ocr_cache_hits', 0) + 1
+            return deepcopy(cached['boxes'])
+        self._ocr_frame_cache = None
+        self._ocr_cache_misses = getattr(self, '_ocr_cache_misses', 0) + 1
+        result, _ = engine(np.array(rgb))
         boxes: list[dict] = []
         for item in result or []:
             try:
@@ -470,7 +511,7 @@ class VisionAutomation:
                     "x": min(xs) + ox, "y": min(ys) + oy,
                     "w": max(xs) - min(xs), "h": max(ys) - min(ys),
                     "score": float(score),
-                    "engine": getattr(self._ocr, "name", "unknown"),
+                    "engine": getattr(engine, "name", "unknown"),
                     "region": list(region) if region else None,
                 })
             except Exception:
@@ -482,6 +523,9 @@ class VisionAutomation:
                     box["x"] / width, box["y"] / height,
                     box["w"] / width, box["h"] / height,
                 ]
+        if boxes and scope is not None and self._ocr_frame_scope() == scope:
+            self._ocr_frame_cache = {'engine': engine, 'key': key, 'pixels': pixels,
+                                     'boxes': deepcopy(boxes)}
         return boxes
 
     def observe_page(self, *, include_ocr: bool = True, visible: bool = False) -> dict:

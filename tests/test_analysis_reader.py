@@ -80,8 +80,8 @@ def test_seconds_and_milliseconds_preserve_explicit_beijing_date():
 
 def test_media_folding_preserves_natural_text_and_parsing_gaps():
     def row(n, text, errors=(), kind='图片'):
-        return dict(ordinal=n, time_Beijing=str(n), analysis_direction='incoming',
-                    text=[text], parse_gaps=list(errors), _media_type=kind)
+        return {'ordinal': n, 'time_Beijing': str(n), 'analysis_direction': 'incoming',
+                    'text': [text], 'parse_gaps': list(errors), '_media_type': kind}
     records = [row(1, '[图片未解读]'), row(2, '[XML/媒体正文未解读]'),
                row(3, '这张图是我喜欢的菜'), row(4, '[图片未解读]', ['recover needed']),
                row(5, '[图片未解读]', kind='文本')]
@@ -93,8 +93,8 @@ def test_media_folding_preserves_natural_text_and_parsing_gaps():
 
 def test_lean_display_preserves_long_text_quotes_dates_and_gaps():
     body='完整正文' * 300
-    row=dict(ordinal=9,analysis_direction='incoming',time_Beijing='2024-06-22T13:53:24+08:00',
-             text=[body,body,'不同的引用'],parse_gaps=['XML parse failure'])
+    row={'ordinal': 9,'analysis_direction': 'incoming','time_Beijing': '2024-06-22T13:53:24+08:00',
+             'text': [body,body,'不同的引用'],'parse_gaps': ['XML parse failure']}
     value=reader.lean_record(row,'2024-06')
     assert value==[9,'C','22 13:53:24',[body,'不同的引用'],['XML parse failure']]
     row.update(analysis_direction='unknown',time_Beijing='2024-07-01T00:00:00+08:00',parse_gaps=[])

@@ -1,7 +1,7 @@
 """Read-only local-database backend for WeChat 4.x conversation workflows.
 
-The optional ``wechatauto-replica`` dependency obtains SQLCipher keys by a
-read-only scan of the logged-in Weixin process.  This adapter never sends a
+Default construction uses existing DPAPI-protected keys and owns temporary
+read-only database working copies. This adapter never sends a
 network request, injects code, or writes the WeChat database.  Sending stays
 outside this backend and is guarded by an explicit confirmation callback.
 """
@@ -11,19 +11,18 @@ import mimetypes
 import sqlite3
 import tempfile
 from collections.abc import Callable
+from contextlib import closing
 from pathlib import Path
 from typing import Any
 
+from wechat_auto.backends.database_resource import DatabaseResourceOwner
+from wechat_auto.backends.replica_import import replica_module
 
-class DatabaseConversationBackend:
-    def __init__(self, db=None):
-        if db is None:
-            try:
-                from wechatauto import WeChatDB
-            except ImportError as exc:  # pragma: no cover - dependency optional
-                raise RuntimeError("Install optional dependency: wechatauto-replica") from exc
-            db = WeChatDB()
-        self._db = db
+
+class DatabaseConversationBackend(DatabaseResourceOwner):
+    def __init__(self, db=None, *, secret_dir="data/.secrets"):
+        super().__init__(db, secret_dir=secret_dir, database_names=('contact.db',),
+                         include_message_family=True)
 
     def resolve_chat(self, query: str) -> dict:
         """Resolve a user-provided name to exactly one local conversation."""
@@ -156,7 +155,8 @@ class DatabaseConversationBackend:
             voice_processing = store.last_voice_processing
             store.set_cursor(source, username, update["watermark"])
         return {"rows_added": added, "watermark": update["watermark"],
-                "new_inbound": len(update["messages"]), "voice_processing": voice_processing}
+                "messages_read": len(records), "new_inbound": len(update["messages"]),
+                "voice_processing": voice_processing}
 
     def initial_import(self, username: str, database_path: str, *, batch_size: int = 200,
                        max_messages: int = 10_000, source: str = "wechat_db") -> dict:
@@ -217,7 +217,7 @@ class DatabaseConversationBackend:
             raise ValueError("batch_size must be positive")
         from wechat_auto.storage import HistoryStore, make_message_id
         try:
-            from wechatauto import MediaDownloader
+            MediaDownloader = replica_module().MediaDownloader
         except ImportError as exc:  # pragma: no cover - optional dependency
             raise RuntimeError("Install optional dependency: wechatauto-replica") from exc
         total_messages = total_media = rows_added = media_errors = 0
@@ -225,52 +225,51 @@ class DatabaseConversationBackend:
             downloader = MediaDownloader(self._db, save_dir=media_dir)
             export_path = str(Path(media_dir) / "messages.sqlite3")
             self._db.export_history(export_path, fmt="sqlite")
-            exported = sqlite3.connect(export_path)
-            exported.row_factory = sqlite3.Row
-            chats = [dict(row) for row in exported.execute(
-                "SELECT username,name,message_count FROM chats ORDER BY rowid")]
-            with HistoryStore(database_path, voice_model_path=voice_model_path, voice_device=voice_device) as store:
-                for chat_index, chat_info in enumerate(chats):
-                    username = str(chat_info.get("username", ""))
-                    if not username:
-                        continue
-                    if progress:
-                        progress(chat_index, len(chats), username)
-                    all_messages = [dict(row) for row in exported.execute(
-                        "SELECT username,local_id,type,sender_id,sender_name,create_time,content,sort_seq "
-                        "FROM messages WHERE username=? ORDER BY sort_seq,local_id", (username,))]
-                    records = []
-                    for item in all_messages:
-                        local_id = item.get("local_id", item.get("sort_seq"))
-                        try:
-                            media = self._download_local_media(
-                                downloader, username, local_id, item, media_dir,
-                                include_images=include_images)
-                        except Exception:
-                            # A missing image key or an incomplete local media
-                            # file must not discard the text history.
-                            media_errors += 1
-                            media = []
-                        records.append({
-                            "id": make_message_id(username, local_id, item.get("sort_seq"),
-                                                  item.get("server_id"), item.get("type")),
-                            "chat": username,
-                            "sender": str(item.get("sender_username", "")),
-                            "content": str(item.get("content", "")),
-                            "time": str(item.get("create_time", "")),
-                            "direction": "outgoing" if str(item.get("sender_id", "")) == "2" else "incoming",
-                            "source": source,
-                            "raw": {"local_id": local_id, "sort_seq": item.get("sort_seq"),
-                                    "server_id": item.get("server_id"), "type": item.get("type")},
-                            "media": media,
-                        })
-                    rows_added += store.save_messages(records)
-                    if all_messages:
-                        store.set_cursor(source, username,
-                                         max(int(m.get("sort_seq", 0)) for m in all_messages))
-                    total_messages += len(records)
-                    total_media += sum(len(record["media"]) for record in records)
-            exported.close()
+            with closing(sqlite3.connect(export_path)) as exported:
+                exported.row_factory = sqlite3.Row
+                chats = [dict(row) for row in exported.execute(
+                    "SELECT username,name,message_count FROM chats ORDER BY rowid")]
+                with HistoryStore(database_path, voice_model_path=voice_model_path, voice_device=voice_device) as store:
+                    for chat_index, chat_info in enumerate(chats):
+                        username = str(chat_info.get("username", ""))
+                        if not username:
+                            continue
+                        if progress:
+                            progress(chat_index, len(chats), username)
+                        all_messages = [dict(row) for row in exported.execute(
+                            "SELECT username,local_id,type,sender_id,sender_name,create_time,content,sort_seq "
+                            "FROM messages WHERE username=? ORDER BY sort_seq,local_id", (username,))]
+                        records = []
+                        for item in all_messages:
+                            local_id = item.get("local_id", item.get("sort_seq"))
+                            try:
+                                media = self._download_local_media(
+                                    downloader, username, local_id, item, media_dir,
+                                    include_images=include_images)
+                            except Exception:
+                                # A missing image key or an incomplete local media
+                                # file must not discard the text history.
+                                media_errors += 1
+                                media = []
+                            records.append({
+                                "id": make_message_id(username, local_id, item.get("sort_seq"),
+                                                      item.get("server_id"), item.get("type")),
+                                "chat": username,
+                                "sender": str(item.get("sender_username", "")),
+                                "content": str(item.get("content", "")),
+                                "time": str(item.get("create_time", "")),
+                                "direction": "outgoing" if str(item.get("sender_id", "")) == "2" else "incoming",
+                                "source": source,
+                                "raw": {"local_id": local_id, "sort_seq": item.get("sort_seq"),
+                                        "server_id": item.get("server_id"), "type": item.get("type")},
+                                "media": media,
+                            })
+                        rows_added += store.save_messages(records)
+                        if all_messages:
+                            store.set_cursor(source, username,
+                                             max(int(m.get("sort_seq", 0)) for m in all_messages))
+                        total_messages += len(records)
+                        total_media += sum(len(record["media"]) for record in records)
         return {"chats": len(chats), "messages_read": total_messages,
                 "media_read": total_media, "rows_added": rows_added,
                 "media_errors": media_errors, "include_images": include_images,
@@ -284,6 +283,8 @@ class DatabaseConversationBackend:
         if raw_type is None:
             raw_type = {"图片": 3, "语音": 34, "视频": 43,
                         "文件/链接/卡片": 49}.get(str(message.get("type", "")))
+            if raw_type is None and str(message.get('type', '')).isdigit():
+                raw_type = int(message['type'])
         if raw_type is None and "type" not in message:
             try:
                 row = downloader.db.get_message_row(username, local_id)
@@ -300,7 +301,7 @@ class DatabaseConversationBackend:
             return []
         path = downloader.download_media(username, local_id, save_dir=media_dir)
         if not path or not Path(path).is_file():
-            return []
+            raise FileNotFoundError('Requested local media cache is unavailable')
         payload = Path(path).read_bytes()
         return [{"kind": kind, "mime_type": mimetypes.guess_type(path)[0] or "application/octet-stream",
                  "original_ref": str(path), "local_name": Path(path).name, "data": payload}]

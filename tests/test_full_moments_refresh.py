@@ -1,6 +1,8 @@
 import json
 from unittest.mock import MagicMock
 
+import pytest
+
 from wechat_auto.memory import MemoryStore
 from wechat_auto.storage import MomentStore, ProfileStore
 
@@ -60,3 +62,41 @@ def test_full_refresh_scopes_current_contacts_preserves_history_and_is_idempoten
                  for r in (first, second)]
     assert manifests[0]['item_id'] == manifests[1]['item_id']
     assert 'https://' not in json.dumps(first)
+
+
+@pytest.mark.parametrize('failure', ['author_collision', 'invalid_media'])
+def test_refresh_bad_later_feed_does_not_commit_earlier_moment(tmp_path, monkeypatch, failure):
+    from wechat_auto.backends import collection_sync as module
+    profiles = MagicMock()
+    profiles.get_all_contact_profiles.return_value = [{'wechat_id': 'u', 'nickname': 'fixture', 'raw': {}}]
+    moments = MagicMock()
+    bad = {'id': 'existing', 'username': 'u', 'create_time': 1}
+    if failure == 'invalid_media':
+        bad = {'id': 'bad-media', 'username': 'u', 'create_time': 3, 'images': ['not-a-media-record']}
+    moments.read_all_available.return_value = [{'id': 'new', 'username': 'u', 'create_time': 2}, bad]
+    monkeypatch.setattr(module, 'DatabaseProfileBackend', lambda db: profiles)
+    monkeypatch.setattr(module, 'DatabaseMomentsBackend', lambda db: moments)
+    path = tmp_path / 'moments.sqlite3'
+    with MomentStore(path) as store:
+        store.save([{'id': 'existing', 'username': 'different-author', 'create_time': 1}])
+    with pytest.raises((ValueError, TypeError)):
+        module.refresh(None, profiles_path=tmp_path / 'profiles.sqlite3', moments_path=path,
+                       memory_path=tmp_path / 'memory.sqlite3', output=tmp_path / 'runs')
+    with MomentStore(path) as store:
+        assert store.get('new') is None
+        assert store.get('bad-media') is None
+        assert store.get('existing')['username'] == 'different-author'
+    assert not list((tmp_path / 'runs').glob('*/summary.json'))
+    moments.download_media.assert_not_called()
+    moments.read_all_available.return_value = [
+        {'id': 'new', 'username': 'u', 'create_time': 2},
+        {'id': 'recovered', 'username': 'u', 'create_time': 3, 'images': []}]
+    kwargs = {'profiles_path': tmp_path / 'profiles.sqlite3', 'moments_path': path,
+              'memory_path': tmp_path / 'memory.sqlite3', 'output': tmp_path / 'runs'}
+    recovered = module.refresh(None, **kwargs)
+    assert recovered['moments_changed'] == 2 and recovered['failures'] == 0
+    repeated = module.refresh(None, **kwargs)
+    assert repeated['moments_changed'] == repeated['new_moments_indexed'] == 0
+    with MomentStore(path) as store:
+        assert store.get('new') is not None and store.get('recovered') is not None
+        assert store.get('existing')['username'] == 'different-author'

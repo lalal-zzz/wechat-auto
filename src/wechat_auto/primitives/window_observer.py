@@ -7,7 +7,7 @@ from wechat_auto.primitives.page_catalog import PAGES
 
 WINDOW_OBSERVER_VERSION = 1
 KNOWN_PAGES = {page.key for page in PAGES}
-MENU_PAGES = {"main_menu", "contact_more", "message_menu", "moments_menu"}
+MENU_PAGES = {"main_menu", "contact_more", "message_menu", "moments_menu", "composer_menu", "composer_selection_menu"}
 EDITOR_PAGES = {"contact_remark", "contact_permissions", "contact_tags", "moments_comment",
                 "moments_publish", "group_name", "group_announcement", "group_invite", "file_picker"}
 

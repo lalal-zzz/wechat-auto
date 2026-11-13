@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+
 from wechat_auto.memory.reading import readable_message
 
 

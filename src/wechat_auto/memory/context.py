@@ -4,10 +4,12 @@ from __future__ import annotations
 import hashlib
 import re
 import sqlite3
-from pathlib import Path
-from datetime import datetime, timedelta, timezone
 from collections.abc import Iterable
+from contextlib import closing
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
+from wechat_auto.memory.reading import readable_message
 from wechat_auto.memory.store import MemoryStore
 
 
@@ -52,22 +54,66 @@ class ContextBuilder:
         return {"text": text, "claim_count": sum(map(len, groups.values())),
                 "fingerprint": fingerprint}
 
-    def _formal_memories(self, conversation_id, person_id):
-        if self.markdown is None:
-            return []
+    def _identity_scope(self, conversation_id):
+        conversation = self.store.get_conversation(conversation_id)
+        scope = {'self_status': 'unknown_conversation', 'self_person_id': None,
+                 'peer_status': 'unknown_conversation', 'peer_person_id': None,
+                 'unexpected_member_count': 0,
+                 'current_account_verified': False, 'requires_review': True}
+        if not conversation:
+            return scope
+        direct = conversation['conversation_type'] == 'direct'
+        peer = self.store._connection.execute("""SELECT person_id FROM person_identities
+            WHERE identity_type='wxid' AND identity_value=?""", (conversation['source_chat_id'],)).fetchone() if direct else None
+        peer_id = peer[0] if peer else None
+        linked = self.store._connection.execute("""SELECT DISTINCT p.person_id,p.person_type,p.status,cm.role
+            FROM conversation_members cm JOIN people p ON p.person_id=cm.person_id
+            WHERE cm.conversation_id=? AND cm.valid_to IS NULL AND p.status!='merged'
+            ORDER BY p.person_id""", (conversation_id,)).fetchall()
+        explicit = {row['person_id']: row for row in linked if row['role'] == 'self'}
+        candidates = explicit or {row['person_id']: row for row in linked
+                                  if row['person_type'] == 'self' and row['person_id'] != peer_id}
+        if explicit and any(row['person_type'] != 'self' or row['person_id'] == peer_id for row in explicit.values()):
+            scope['self_status'] = 'invalid_self_binding'
+        elif candidates:
+            if len(candidates) == 1 and next(iter(candidates.values()))['status'] == 'active':
+                scope.update(self_status='conversation_linked_self', self_person_id=next(iter(candidates)))
+            else:
+                scope['self_status'] = 'ambiguous' if len(candidates) > 1 else 'inactive_linked_self'
+        else:
+            selves = [row for row in self.store._connection.execute(
+                "SELECT person_id,status FROM people WHERE person_type='self' AND status!='merged' ORDER BY person_id")
+                if row[0] != peer_id]
+            if len(selves) == 1 and selves[0]['status'] == 'active':
+                scope.update(self_status='archive_unique_active', self_person_id=selves[0]['person_id'])
+            else:
+                scope['self_status'] = 'ambiguous' if len(selves) > 1 else 'missing_active_self'
+        if direct:
+            if peer_id in {row['person_id'] for row in linked
+                           if row['person_type'] in {'self', 'contact', 'group_member'}} and peer_id != scope['self_person_id']:
+                scope.update(peer_status='stable_linked_peer', peer_person_id=peer_id)
+            else:
+                scope['peer_status'] = 'missing_or_mismatched_peer'
+            allowed = {scope['self_person_id'], scope['peer_person_id']} - {None}
+            scope['unexpected_member_count'] = len({row['person_id'] for row in linked} - allowed)
+        else:
+            scope['peer_status'] = 'not_applicable_to_group'
+        scope['requires_review'] = (scope['self_person_id'] is None or scope['unexpected_member_count'] > 0
+                                    or scope['peer_status'] == 'missing_or_mismatched_peer')
+        return scope
+
+    def _formal_memories(self, conversation_id, person_id, identity_scope):
         members = [row[0] for row in self.store._connection.execute(
             "SELECT DISTINCT person_id FROM conversation_members WHERE conversation_id=? AND valid_to IS NULL",
             (conversation_id,))]
         conversation = self.store.get_conversation(conversation_id)
-        # Direct-chat imports may only link the peer. Resolve self by the
-        # explicit Person type, never by a nickname or an arbitrary account.
-        if conversation and conversation["conversation_type"] == "direct":
-            selves = [row[0] for row in self.store._connection.execute(
-                "SELECT person_id FROM people WHERE person_type='self' AND status='active'")]
-            if len(selves) == 1 and selves[0] not in members:
-                members.append(selves[0])
+        if conversation and conversation['conversation_type'] == 'direct':
+            selected = {identity_scope['self_person_id'], identity_scope['peer_person_id']} - {None}
+            members = sorted(selected)
         if person_id and person_id not in members:
             raise ValueError("person_id is not an active member of this conversation")
+        if self.markdown is None:
+            return []
         scopes = [("conversation", conversation_id, "")]
         if not self.store.current_version("conversation", conversation_id):
             scopes.extend(("conversation", conversation_id, period)
@@ -94,12 +140,38 @@ class ContextBuilder:
                 raise ValueError("formal Memory hash mismatch")
             body = data.decode("utf-8")
             metadata = body.split("---", 2)[1] if body.startswith("---\n") else ""
-            match = re.search(r"^source_range:\s*(.+)$", metadata, re.M)
+            match = re.search(r"^source_range:\s*(.+)$", metadata, re.MULTILINE)
             result.append({"scope_type": scope, "scope_id": target, "period": period,
                            "version": version["version"], "path": str(path),
                            "content_hash": version["content_hash"],
                            "source_range": match[1].strip() if match else "unknown", "text": body})
         return result
+
+    def _current_message_scope(self, conversation_id, messages):
+        conversation = self.store.get_conversation(conversation_id)
+        declared = unscoped = 0
+        for item in messages:
+            if not isinstance(item, dict):
+                raise TypeError('Current message records must be dictionaries')
+            scopes = {key: item[key] for key in ('chat', 'source_chat_id', 'conversation_id')
+                      if item.get(key) not in (None, '')}
+            if not scopes:
+                unscoped += 1
+                continue
+            if conversation is None:
+                raise ValueError('Current message scope cannot be resolved')
+            for key, value in scopes.items():
+                if not isinstance(value, str):
+                    raise TypeError('Current message scope must be text')
+                expected = conversation_id if key == 'conversation_id' else conversation['source_chat_id']
+                if value != expected:
+                    raise ValueError('Current message scope does not match this conversation')
+            declared += 1
+        return {'status': 'unscoped' if unscoped else 'declared_conversation_match' if messages else 'empty',
+                'declared_count': declared, 'unscoped_count': unscoped,
+                'conversation_id': conversation_id,
+                'source_chat_id': conversation['source_chat_id'] if conversation else None,
+                'requires_review': unscoped > 0}
 
     def _pending_messages(self, conversation_id, memories, limit, after_id):
         conversation = self.store.get_conversation(conversation_id)
@@ -114,12 +186,16 @@ class ContextBuilder:
                 ends.append(match[1])
         info = {"status": "unknown", "boundary": max(ends) if ends else None,
                 "boundary_overlap": "last_analysed_day", "source": str(self.history_path) if self.history_path else None,
-                "count": 0, "remaining_count": None, "next_after_id": ""}
+                "count": 0, "remaining_count": None, "next_after_id": "",
+                "unknown_time_count": None}
         if not ends or not conversation or not self.history_path or not self.history_path.is_file():
             return [], info
         since = int(datetime.strptime(max(ends), "%Y-%m-%d").replace(
             tzinfo=timezone(timedelta(hours=8))).timestamp())
-        with sqlite3.connect(self.history_path.as_uri() + "?mode=ro", uri=True) as db:
+        with closing(sqlite3.connect(self.history_path.as_uri() + "?mode=ro", uri=True)) as db:
+            # Pin one archive generation for counts, message bodies and latest
+            # transcription versions. Autocommit SELECTs can see different writes.
+            db.execute('BEGIN')
             cursor = 0
             if after_id:
                 row = db.execute("SELECT rowid FROM messages WHERE id=? AND chat=?",
@@ -127,20 +203,21 @@ class ContextBuilder:
                 if not row:
                     raise ValueError("pending cursor is not in this conversation")
                 cursor = row[0]
-            epoch = "CASE WHEN length(message_time)=10 AND message_time NOT GLOB '*[^0-9]*' THEN CAST(message_time AS INTEGER) ELSE CAST(strftime('%s', message_time || CASE WHEN length(message_time)=19 THEN '+08:00' ELSE '' END) AS INTEGER) END"
+            epoch = "CASE WHEN length(message_time)=10 AND message_time NOT GLOB '*[^0-9]*' THEN CAST(message_time AS INTEGER) WHEN length(message_time)=13 AND message_time NOT GLOB '*[^0-9]*' THEN CAST(message_time AS INTEGER)/1000 ELSE CAST(strftime('%s', message_time || CASE WHEN length(message_time)=19 THEN '+08:00' ELSE '' END) AS INTEGER) END"
             where = f"chat=? AND rowid>? AND ({epoch}>=? OR {epoch} IS NULL)"
             args = (conversation["source_chat_id"], cursor, since)
             total = db.execute("SELECT count(*) FROM messages WHERE " + where, args).fetchone()[0]
+            unknown_times = db.execute("SELECT count(*) FROM messages WHERE chat=? AND ("+epoch+") IS NULL",
+                                       (conversation['source_chat_id'],)).fetchone()[0]
             rows = db.execute("SELECT id,sender,content,message_time,direction FROM messages WHERE " +
                               where + " ORDER BY rowid LIMIT ?", (*args, limit)).fetchall()
-        messages = [dict(zip(("id", "sender", "content", "time", "direction"), row)) for row in rows]
-        with sqlite3.connect(self.history_path.as_uri()+"?mode=ro",uri=True) as db:
+            messages = [dict(zip(("id", "sender", "content", "time", "direction"), row)) for row in rows]
             if db.execute("SELECT 1 FROM sqlite_master WHERE name='voice_transcriptions' AND type='table'").fetchone():
                 for item in messages:
-                    tr = db.execute("SELECT text,engine,status FROM voice_transcriptions WHERE message_id=? ORDER BY version DESC LIMIT 1",(item["id"],)).fetchone()
-                    if tr:item["transcription"]=dict(zip(("text","engine","status"),tr))
+                    tr = db.execute("SELECT version,text,engine,status,source_ref,audio_sha256 FROM voice_transcriptions WHERE message_id=? ORDER BY version DESC LIMIT 1",(item["id"],)).fetchone()
+                    if tr:item["transcription"]=dict(zip(("version","text","engine","status","source_ref","audio_sha256"),tr))
         info.update(status="partial" if total > len(rows) else "archive_range_loaded",
-                    count=len(rows), remaining_count=total-len(rows),
+                    count=len(rows), remaining_count=total-len(rows), unknown_time_count=unknown_times,
                     next_after_id=messages[-1]["id"] if total > len(rows) else "")
         return messages, info
 
@@ -150,20 +227,63 @@ class ContextBuilder:
         if not 1 <= pending_limit <= 5000:
             raise ValueError("pending_limit must be from 1 through 5000")
         messages = list(current_messages)
-        formal = self._formal_memories(conversation_id, person_id)
+        message_scope = self._current_message_scope(conversation_id, messages)
+        identity_scope = self._identity_scope(conversation_id)
+        formal = self._formal_memories(conversation_id, person_id, identity_scope)
         pending, coverage = self._pending_messages(conversation_id, formal, pending_limit, pending_after_id)
         memory = self.compact_claims(person_id=person_id, conversation_id=conversation_id, limit=claim_limit)
-        def render(items):
-            return "\n".join(f"- {i.get('time', '')} {i.get('sender', '')} [{i.get('id', '')}]: {i.get('content', '')} {i.get('transcription', {}).get('text', '')}" for i in items) or "（无）"
-        text = "当前消息（优先依据）：\n\n" + render(messages)
-        text += "\n\n分析覆盖边界起的原始消息（含末日重读，尚未归纳为分析结论）：\n\n" + render(pending)
+        content_gaps = []
+        def render(items, source):
+            lines = []
+            for index, item in enumerate(items):
+                parts, gaps = readable_message(item)
+                body = str(item.get('content') or '')
+                raw = item.get('raw')
+                voice = ((isinstance(raw, dict) and str(raw.get('type')) in {'34', '语音'})
+                         or body.strip() == '[语音]' or '<voicemsg' in body)
+                if voice and not any(p.startswith('[语音转写 · ') for p in parts):
+                    gaps.append('voice transcription unavailable; audio requires inspection')
+                if any('未解读]' in p for p in parts):
+                    gaps.append('message body or media requires inspection')
+                if gaps:
+                    content_gaps.append({'source': source, 'message_id': item.get('id', ''),
+                                         'index': index, 'reasons': list(dict.fromkeys(gaps))})
+                lines.append(f"- {item.get('time', '')} {item.get('sender', '')} [{item.get('id', '')}]: " + '\n'.join(parts))
+            return '\n'.join(lines) or '（无）'
+        heading = ("调用方当前消息（仅声明会话匹配，来源新鲜度仍须核对）"
+                   if message_scope['status'] == 'declared_conversation_match'
+                   else "调用方提供的未定范围消息（须先核对会话，不能当作已确认当前消息）"
+                   if messages else "当前消息（未提供）")
+        text = heading + "：\n\n" + render(messages, 'current')
+        text += "\n\n分析边界后的原始消息及时间不明候选（末日重读，未知时间不视作新增事实）：\n\n" + render(pending, 'pending')
         text += "\n\n已完成的正式分析（历史背景）：\n\n" + ("\n\n".join(
             f"来源：{m['path']} · v{m['version']} · {m['source_range']}\n{m['text']}" for m in formal) or "暂无正式分析。")
         text += "\n\n补充短记忆：\n\n" + memory["text"]
         text += f"\n\n增量读取状态：{coverage['status']}；未读条数：{coverage['remaining_count']}。最新明确表达优先于历史推断；未读完时继续分页，不能声称已覆盖全部增量。"
-        fingerprint = hashlib.sha256((text + repr(coverage)).encode("utf-8", "surrogatepass")).hexdigest()
+        text += (f"\n\n归档身份范围：self={identity_scope['self_status']}；peer={identity_scope['peer_status']}。"
+                 "当前登录账号尚未由此上下文核验，身份有歧义时须先补充核对。")
+        text += (f"\n\n当前消息范围：{message_scope['status']}；未声明会话条数：{message_scope['unscoped_count']}。"
+                 f"归档时间不明条数：{coverage['unknown_time_count']}；时间不明时须核对，不是继续空翻页即可解决。")
+        text += f"\n\n正文读取缺口：{len(content_gaps)} 条；存在缺口时须补充读取或核对，分页完成不代表内容已解读。机器转写候选仍须按关键内容复核。"
+        transcription_inputs = []
+        for source, items in (('current', messages), ('pending', pending)):
+            for index, item in enumerate(items):
+                transcript = item.get('transcription')
+                if isinstance(transcript, dict):
+                    transcription_inputs.append((source, index, item.get('id'), tuple(
+                        transcript.get(key) for key in ('version', 'text', 'engine', 'status',
+                                                        'source_ref', 'audio_sha256', 'segments', 'segments_json'))))
+        fingerprint = hashlib.sha256((text + repr(coverage) + repr(identity_scope) + repr(message_scope) + repr(content_gaps) + repr(transcription_inputs)).encode("utf-8", "surrogatepass")).hexdigest()
         return {"text": text, "fingerprint": fingerprint, "message_count": len(messages),
                 "claim_count": memory["claim_count"], "memory_sources": [
                     {k: v for k, v in m.items() if k != "text"} for m in formal],
                 "pending_messages": pending, "pending_coverage": coverage,
-                "requires_more_data": coverage["status"] in {"partial", "unknown"}}
+                "identity_scope": identity_scope,
+                "requires_identity_review": identity_scope["requires_review"],
+                "current_message_scope": message_scope,
+                "requires_message_scope_review": message_scope['requires_review'],
+                "requires_time_review": bool(coverage['unknown_time_count']),
+                "content_gaps": content_gaps,
+                "requires_content_review": bool(content_gaps),
+                "requires_more_data": (coverage["status"] in {"partial", "unknown"} or identity_scope["requires_review"]
+                                       or message_scope['requires_review'] or bool(coverage['unknown_time_count']) or bool(content_gaps))}

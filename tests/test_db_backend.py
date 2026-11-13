@@ -1,6 +1,7 @@
 import pytest
 
 from wechat_auto.backends import DatabaseConversationBackend, DatabaseProfileBackend
+from wechat_auto.storage import HistoryStore
 
 
 class _DB:
@@ -73,6 +74,27 @@ def test_sync_when_notified_uses_persisted_cursor(tmp_path):
     result = backend.sync_when_notified("room@chatroom", str(tmp_path / "history.sqlite3"))
     assert result["watermark"] == 4
     assert result["rows_added"] == 2
+
+
+def test_sync_replays_durable_messages_when_cursor_write_fails(tmp_path, monkeypatch):
+    backend = DatabaseConversationBackend(_DB())
+    path = tmp_path / "history.sqlite3"
+    chat = "room@chatroom"
+
+    def fail_cursor(*args):
+        raise RuntimeError("simulated cursor write failure")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(HistoryStore, "set_cursor", fail_cursor)
+        with pytest.raises(RuntimeError, match="cursor write failure"):
+            backend.sync_when_notified(chat, str(path))
+    with HistoryStore(path) as archive:
+        assert archive.get_cursor("wechat_db", chat) == 0
+        assert len(archive.fetch_messages(chat)) == 2
+    result = backend.sync_when_notified(chat, str(path))
+    assert (result["watermark"], result["rows_added"]) == (4, 0)
+    with HistoryStore(path) as archive:
+        assert archive.get_cursor("wechat_db", chat) == 4
 
 
 def test_initial_import_is_bounded_and_sets_cursor(tmp_path):

@@ -76,3 +76,23 @@ claims 表的 conversation_expression 类型及证据关联保存；不另建任
 原语音保存在所选消息归档库 message_media 的 BLOB 中，转写保存在同库 voice_transcriptions。两者通过原消息稳定 message_id 关联；转写记录版本、引擎/模型来源、audio_sha256、时间片段、识别分数和状态，用户更正保留新版本。消息的原始 XML 不替换，转写文本不另存一套人物 Memory。
 
 月度输入及证据读取返回最新 transcription；正式月报仍写 Markdown，引用对应原消息和必要的转写片段。语音尚未归档或转写时明确标示缺口，不写成已分析。配置归档路径的分析服务会将相关转写修订纳入输入指纹；其他自建调用必须核对其实际 history_path 配置，不能假定仅消息 ID 不变就代表内容未变。
+
+## Markdown 发布与读取一致性
+
+同一目标的正文发布持有系统字节锁；竞争写入停止，不覆盖另一写入者的临时文件。
+临时文件唯一命名、flush/fsync 后原子替换。正文/current 或索引发布失败时清理本次
+版本，并恢复先前已登记正文；遇已有未登记候选版本保留并停止，不能覆盖历史。
+读取最新成功正文以 analysis_versions 当前索引及内容哈希为准，不将未登记的
+current.md 当作成功分析。索引版本缺失/损坏时明确失败，保留文件待恢复。
+AnalysisService.submit 在同一数据库原子批次中提交 Claim/Event、版本索引、
+覆盖水位、run 状态和下游脏节点/任务；已有方法的局部 commit 在批次内延迟。
+正文目标锁持有至数据库提交结束，异常或 KeyboardInterrupt 时回滚数据库并恢复
+此前已登记正文，失败 run 单独保留。独立短操作仍维持原有提交方式。
+`memory.recover_publication(scope_type, scope_id, period)` 可在取得目标写锁后恢复
+中断发布：逐字节保留未登记版本、异常 current.md 与临时文件到
+`data/work/analysis/recovery-{id}/`，以 SHA-256 回执记录，不删除候选、不修改
+正式版本索引或 run 状态。只恢复已登记且哈希正确的正文；没有成功版本就不创建
+正式 current。恢复幂等，移动/恢复失败会撤回本次变更，目标正在写入时停止。
+历史版本读取同样要求成功索引及哈希，未登记候选不能通过 get_version 暴露为正式
+历史。这不代替分析语义质量审核、来源新鲜度门禁或跨文件系统的断电保证；恢复
+中再次强杀时需按 work 内 prepared 回执核对，原 run 是否完成仍需实际运行证据。

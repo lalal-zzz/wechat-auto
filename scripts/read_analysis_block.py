@@ -7,12 +7,12 @@ import argparse
 import json
 import re
 import sys
-from pathlib import Path
 from collections import Counter
+from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
-from wechat_auto.memory.reading import readable_message, display_time
+from wechat_auto.memory.reading import display_time, readable_message
 
 MEDIA_TYPES = {'图片', '动画表情', '语音', '视频', '3', '34', '43', '47'}
 MEDIA_MARKERS = {'[图片未解读]', '[动画表情未解读]', '[语音未转写]',
@@ -26,11 +26,11 @@ def fold_media_records(records):
     def flush():
         if len(pending) < 2:
             return list(pending)
-        return [dict(unread_media_range=[pending[0]['ordinal'], pending[-1]['ordinal']],
-                     count=len(pending),
-                     time_Beijing=[pending[0]['time_Beijing'], pending[-1]['time_Beijing']],
-                     directions=dict(Counter(r['analysis_direction'] for r in pending)),
-                     kinds=dict(Counter(r['_media_type'] for r in pending)))]
+        return [{"unread_media_range": [pending[0]['ordinal'], pending[-1]['ordinal']],
+                     "count": len(pending),
+                     "time_Beijing": [pending[0]['time_Beijing'], pending[-1]['time_Beijing']],
+                     "directions": dict(Counter(r['analysis_direction'] for r in pending)),
+                     "kinds": dict(Counter(r['_media_type'] for r in pending))}]
 
     for record in records:
         if (record.get('_media_type') in MEDIA_TYPES and not record['parse_gaps'] and
@@ -82,7 +82,7 @@ def main():
     rows = json.loads(args.source.read_text(encoding='utf-8'))
     selected = rows[args.start - 1:args.start - 1 + args.count]
     if args.lean:
-        print(json.dumps(dict(period=period, timezone='+08:00', columns=['ordinal', 'speaker', 'day HH:mm:ss (full date when outside period)', 'texts', 'parse_gaps only when nonempty'], speakers={'S': 'self/outgoing', 'C': 'contact/incoming', '?': 'unknown'})))
+        print(json.dumps({"period": period, "timezone": '+08:00', "columns": ['ordinal', 'speaker', 'day HH:mm:ss (full date when outside period)', 'texts', 'parse_gaps only when nonempty'], "speakers": {'S': 'self/outgoing', 'C': 'contact/incoming', '?': 'unknown'}}))
     elif args.compact:
         print(json.dumps(['ordinal', 'analysis_direction', 'time_Beijing', 'texts', 'parse_gaps']))
     records = []
@@ -93,9 +93,9 @@ def main():
             direction = 'unknown'
         parts, errors = readable_message(row, recover_xml=args.recover_xml)
         raw = row.get('raw')
-        records.append(dict(ordinal=ordinal, time=row.get('time'), time_Beijing=display_time(row.get('time')),
-                            analysis_direction=direction, text=parts, parse_gaps=errors,
-                            _media_type=str(raw.get('type', '')) if isinstance(raw, dict) else ''))
+        records.append({"ordinal": ordinal, "time": row.get('time'), "time_Beijing": display_time(row.get('time')),
+                            "analysis_direction": direction, "text": parts, "parse_gaps": errors,
+                            "_media_type": str(raw.get('type', '')) if isinstance(raw, dict) else ''})
     entries = list(fold_media_records(records)) if args.fold_media else records
     for record in entries:
         if 'unread_media_range' in record:
@@ -108,11 +108,11 @@ def main():
         else:
             value = {key: val for key, val in record.items() if not key.startswith('_')}
         print(json.dumps(value, ensure_ascii=False))
-    print(json.dumps(dict(displayed=len(selected), first_ordinal=args.start,
-                          last_ordinal=args.start + len(selected) - 1,
-                          total_rows=len(rows), output_entries=len(entries),
-                          media_rows_folded=sum(r['count'] for r in entries if 'unread_media_range' in r),
-                          semantic_reading_certified=False)))
+    print(json.dumps({"displayed": len(selected), "first_ordinal": args.start,
+                          "last_ordinal": args.start + len(selected) - 1,
+                          "total_rows": len(rows), "output_entries": len(entries),
+                          "media_rows_folded": sum(r['count'] for r in entries if 'unread_media_range' in r),
+                          "semantic_reading_certified": False}))
 
 
 if __name__ == '__main__':

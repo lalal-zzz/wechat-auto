@@ -6,7 +6,6 @@ import re
 import subprocess
 from pathlib import Path
 
-
 ROOT = Path(__file__).resolve().parents[1]
 PRIVATE_PATHS = {
     "docs/PROJECT_STATE.md", "docs/HISTORY_SOURCE_AUDIT.md",

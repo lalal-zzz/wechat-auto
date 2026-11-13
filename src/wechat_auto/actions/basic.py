@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import re
 import time
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -62,12 +63,15 @@ class BasicSkill(BaseSkill):
             "send_current_verified_text": self.send_current_verified_text,
             "open_search_content": self.open_search_content,
             "prepare_text": self.prepare_text,
+            "cancel_prepared_text": self.cancel_prepared_text,
+            "delete_verified_text": self.delete_verified_text,
             "send_text": self.send_text,
             "prepare_mention": self.prepare_mention,
             "send_mention": self.send_mention,
             "prepare_quote": self.prepare_quote,
             "send_quote": self.send_quote,
             "copy_message": self.copy_message,
+            "copy_text_draft_identity": self.copy_text_draft_identity,
             "prepare_profile_observation": self.prepare_profile_observation,
             "capture_visible_signature": self.capture_visible_signature,
             "capture_contact_profile": self.capture_contact_profile,
@@ -76,8 +80,16 @@ class BasicSkill(BaseSkill):
             "scroll": self.scroll,
             "press_key": self.press_key,
             "prepare_file": self.prepare_file,
+            "hover_attachment_card": self.hover_attachment_card,
+            "open_attachment_context_menu": self.open_attachment_context_menu,
+            "copy_attachment_identity": self.copy_attachment_identity,
+            "cancel_verified_attachment": self.cancel_verified_attachment,
+            "open_composer_context_menu": self.open_composer_context_menu,
+            "dismiss_composer_context_menu": self.dismiss_composer_context_menu,
             "send_file": self.send_file,
             "prepare_image": self.prepare_image,
+            "cancel_verified_image": self.cancel_verified_image,
+            "copy_image_identity": self.copy_image_identity,
             "send_image": self.send_image,
             "open_emoji": self.open_emoji,
             "open_emoji_favorites": self.open_emoji_favorites,
@@ -287,6 +299,7 @@ class BasicSkill(BaseSkill):
         if page not in KNOWN_PAGES or not 1 <= max_steps <= 12:
             raise ValueError('Known page and 1..12 route steps are required')
         steps = []
+        attempted_routes = set()
         def stopped(code):
             return self._receipt('navigate_page', success=False, target_page=page,
                                  stop_reason=code, steps=steps, sent=False, identity_verified=False)
@@ -327,6 +340,10 @@ class BasicSkill(BaseSkill):
                 return stopped('route_unavailable')
             if not route:
                 return stopped('route_unavailable')
+            edge = (source['hwnd'], next(iter(keys)), route[0])
+            if edge in attempted_routes:
+                return stopped('route_no_progress')
+            attempted_routes.add(edge)
             op = next(op for op in OPERATIONS if op.name == route[0])
             if op.method == 'visual_control' and op.name not in {
                 'open_contacts', 'open_chats', 'open_discover', 'open_main_menu'
@@ -442,6 +459,7 @@ class BasicSkill(BaseSkill):
         from wechat_auto.utils.screenshot import ScreenshotHelper
 
         self._activate()
+        search_scope = self._app.describe_window(self._app.handle)
         image = ScreenshotHelper().capture_visible_window(self._app.handle)
         if image is None:
             raise RuntimeError("Visible foreground search window capture unavailable")
@@ -487,6 +505,7 @@ class BasicSkill(BaseSkill):
         driver.click_window_fraction((field["x"] + field["w"] * .4) / image.width,
                                      (field["y"] + field["h"] / 2) / image.height)
         with driver.foreground_lease():
+            self._verify_search_input_focus(field, image.size, search_scope)
             driver._type_text(query)
             time.sleep(self._config.action_delay + .5)
         visible = ScreenshotHelper().capture_visible_window(self._app.handle)
@@ -501,7 +520,29 @@ class BasicSkill(BaseSkill):
                 raise RuntimeError("Search query was not verified; no result selected")
             verification = 'owned_search_popup_query_echo'
         return self._receipt("prepare_search", verified_by=verification,
-                             selection_required=True, sent=False)
+                             selection_required=True, sent=False,
+                             focus_verified_by='win32_caret_in_current_search_field')
+
+    def _verify_search_input_focus(self, field: dict, size: tuple, scope: dict) -> None:
+        """Require a current search frame and a public caret before typing."""
+        from wechat_auto.primitives.page_geometry import observe_geometry
+        from wechat_auto.utils.screenshot import ScreenshotHelper
+
+        if self._app.describe_window(self._app.handle) != scope:
+            raise RuntimeError('Search window changed; typing stopped')
+        image = ScreenshotHelper().capture_visible_window(self._app.handle)
+        if image is None or image.size != size:
+            raise RuntimeError('Visible search frame changed; typing stopped')
+        fields = observe_geometry(image).get('search_field_candidates', [])
+        if len(fields) != 1 or any(abs(fields[0][k] - field[k]) > 3 for k in ('x', 'y', 'w', 'h')):
+            raise RuntimeError('Search field changed; typing stopped')
+        caret = self._app.focused_caret_rect()
+        current = fields[0]
+        if (not isinstance(caret, (list, tuple)) or len(caret) != 4
+                or not current['x'] < caret[0] < caret[2] < current['x'] + current['w']
+                or not current['y'] < caret[1] < caret[3] < current['y'] + current['h']
+                or self._app.describe_window(self._app.handle) != scope):
+            raise RuntimeError('Search input focus not verified; typing stopped')
 
     def reset_search_popup(self) -> dict:
         """Dismiss only a recognized owned search popup before a new query."""
@@ -733,7 +774,64 @@ class BasicSkill(BaseSkill):
         return self._receipt('close_private_chat_details',success=bool(success),sent=False,
                              verified_by='details_disappeared_and_composer_observed')
 
-    def send_current_verified_text(self, text: str, *, confirm: bool = False) -> dict:
+    def _checked_recipient_composer(self, lease: dict, *, allowed_popup: dict | None = None,
+                                    expected_image: Path | None = None):
+        """Observe the same verified recipient and one current text composer."""
+        from wechat_auto.primitives.vision import normalize_text
+
+        metadata = self._app.describe_window(self._app.handle)
+        auxiliary = [w for w in self._app.list_windows() if not w['is_main']]
+        popup_matches = (allowed_popup is not None and len(auxiliary) == 1
+                         and all(auxiliary[0][k] == allowed_popup[k] for k in (
+                             'hwnd', 'pid', 'class', 'owner_hwnd', 'rect', 'client_rect', 'dpi')))
+        if (any(metadata[k] != lease['metadata'][k] for k in ('hwnd','pid','rect','client_rect','dpi'))
+                or auxiliary and not popup_matches or allowed_popup is not None and not popup_matches):
+            raise RuntimeError('Recipient window changed or auxiliary window appeared')
+        # PrintWindow sees the underlying editor without this separately owned
+        # native menu. Every other caller still requires a visible foreground frame.
+        observation = self.vision.observe_page(visible=allowed_popup is None)
+        state = observation.get('state', {})
+        titles = [b for b in state.get('regions',{}).get('conversation_header', [])
+                  if normalize_text(b['text']) == normalize_text(lease['query'])]
+        candidates = state.get('geometry',{}).get('composer_candidates', [])
+        if (not observation.get('ok') or len(titles) != 1 or state.get('overlays')
+                or state.get('panels') or state.get('content_windows')
+                or state.get('composer',{}).get('state') != 'present' or len(candidates) != 1):
+            raise RuntimeError('Current recipient/header/composer not verified')
+        send_labels = [b for b in observation['boxes'] if normalize_text(b['text']) in {
+            '发送','发送(S)','发送（S）'} and b['y'] >= candidates[0]['y']
+            and b['x']+b['w']/2 > candidates[0]['x']+candidates[0]['w']*.7]
+        if len(send_labels) != 1:
+            raise RuntimeError('Composer action row absent or ambiguous')
+        action_top = send_labels[0]['y'] - send_labels[0]['h']*.25
+        body_boxes = [observation['boxes'][b['box_index']] for b in sorted(state['regions']['composer'],key=lambda b:(
+            observation['boxes'][b['box_index']]['y'],observation['boxes'][b['box_index']]['x']))
+            if (observation['boxes'][b['box_index']]['y']
+                + observation['boxes'][b['box_index']]['h']/2) < action_top]
+        body = ''.join(b['text'] for b in body_boxes)
+        from wechat_auto.primitives.page_controls import (
+            composer_send_enabled,
+            is_empty_composer_placeholder,
+        )
+
+        if is_empty_composer_placeholder(getattr(self.vision, '_last_observed_image', None),
+                                         body_boxes, send_labels[0]):
+            body = ''
+            body_boxes = []
+        if expected_image is not None:
+            from wechat_auto.primitives.image_preview import find_image_preview
+
+            observation['_image_preview'] = find_image_preview(
+                self.vision._last_observed_image, candidates[0], expected_image)
+        if expected_image is None and not normalize_text(body) and composer_send_enabled(
+                getattr(self.vision, '_last_observed_image', None), send_labels[0]) is not False:
+            raise RuntimeError('Empty OCR does not prove an empty composer; Send enabled or pixels unavailable')
+        observation['_composer_body_boxes'] = body_boxes
+        return observation, normalize_text(body), candidates[0]
+
+    def send_current_verified_text(self, text: str, *, confirm: bool = False,
+                                   use_existing_draft: bool = False,
+                                   before_dispatch: Callable[[], None] | None = None) -> dict:
         """Send once after exact recipient/draft checks; observe the outgoing result."""
         from wechat_auto.primitives.vision import normalize_text
 
@@ -745,73 +843,81 @@ class BasicSkill(BaseSkill):
         if not lease:
             raise PermissionError('Verified stable recipient lease required')
         def checked():
-            metadata = self._app.describe_window(self._app.handle)
-            if (any(metadata[k] != lease['metadata'][k] for k in ('hwnd','pid','rect','client_rect','dpi'))
-                    or any(not w['is_main'] for w in self._app.list_windows())):
-                raise RuntimeError('Recipient window changed or auxiliary window appeared')
-            observation = self.vision.observe_page(visible=True)
-            state = observation.get('state', {})
-            titles = [b for b in state.get('regions',{}).get('conversation_header', [])
-                      if normalize_text(b['text']) == normalize_text(lease['query'])]
-            candidates = state.get('geometry',{}).get('composer_candidates', [])
-            if (not observation.get('ok') or len(titles) != 1 or state.get('overlays')
-                    or state.get('composer',{}).get('state') != 'present' or len(candidates) != 1):
-                raise RuntimeError('Current recipient/header/composer not verified')
-            send_labels = [b for b in observation['boxes'] if normalize_text(b['text']) in {
-                '发送','发送(S)','发送（S）'} and b['y'] >= candidates[0]['y']
-                and b['x']+b['w']/2 > candidates[0]['x']+candidates[0]['w']*.7]
-            if len(send_labels) != 1:
-                raise RuntimeError('Composer action row absent or ambiguous')
-            action_top = send_labels[0]['y'] - send_labels[0]['h']*.25
-            body = ''.join(b['text'] for b in sorted(state['regions']['composer'],key=lambda b:(
-                observation['boxes'][b['box_index']]['y'],observation['boxes'][b['box_index']]['x']))
-                if (observation['boxes'][b['box_index']]['y']
-                    + observation['boxes'][b['box_index']]['h']/2) < action_top)
-            return observation, normalize_text(body), candidates[0]
+            return self._checked_recipient_composer(lease)
         self._activate()
         before, body, frame = checked()
         previous_matches = sum(normalize_text(b['text']) == normalize_text(text)
                                for b in before['boxes'] if b['y'] < frame['y']
                                and b['x']+b['w']/2 > before['state']['size'][0]*.6)
-        if body:
-            raise RuntimeError('Existing draft present; no typing or sending')
         size = before['state']['size']
-        self.keyboard_only.click_window_fraction((frame['x']+frame['w']/2)/size[0],
-                                                 (frame['y']+frame['h']*.3)/size[1])
-        self.keyboard_only._type_text(text)
-        time.sleep(self._config.action_delay + .5)
-        draft, body, _ = checked()
+        if use_existing_draft:
+            if body != normalize_text(text):
+                raise RuntimeError('Existing draft does not match confirmed body; no send dispatched')
+            draft, body, draft_frame = checked()
+        else:
+            if body:
+                raise RuntimeError('Existing draft present; no typing or sending')
+            self.keyboard_only.click_window_fraction((frame['x']+frame['w']/2)/size[0],
+                                                     (frame['y']+frame['h']*.3)/size[1])
+            self.keyboard_only._type_text(text)
+            time.sleep(self._config.action_delay + .5)
+            draft, body, draft_frame = checked()
         if body != normalize_text(text):
             raise RuntimeError('Confirmed draft text not exactly observed; no send dispatched')
+        if before_dispatch is not None:
+            self._recipient_lease = None
+            before_dispatch()
+            draft, body, current_frame = checked()
+            if (body != normalize_text(text) or current_frame != draft_frame
+                    or draft['state']['size'] != size):
+                raise RuntimeError('Draft or composer changed during dispatch checks; no send dispatched')
         send = [b for b in draft['boxes'] if normalize_text(b['text']) in {'发送','发送(S)','发送（S）'}
-                and b['y'] >= frame['y'] and b.get('score',0) >= .65]
+                and b['y'] >= draft_frame['y'] and b.get('score',0) >= .65]
         if len(send) != 1:
             raise RuntimeError('Unique current Send button not observed; no send dispatched')
         self._recipient_lease = None
-        self.keyboard_only.click_window_fraction(*self._box_center_fraction(send[0],tuple(size)))
-        time.sleep(self._config.action_delay + .8)
-        after = self.vision.observe_page(visible=True)
-        state = after.get('state',{})
-        remaining = [b for b in state.get('regions',{}).get('composer',[]) if normalize_text(b['text']) == normalize_text(text)]
-        outgoing = [b for b in after.get('boxes',[]) if normalize_text(b['text']) == normalize_text(text)
-                    and b['x']+b['w']/2 > size[0]*.6 and b['y'] < frame['y']]
-        import numpy as np
+        try:
+            self.keyboard_only.click_window_fraction(*self._box_center_fraction(send[0],tuple(size)))
+            time.sleep(self._config.action_delay + .8)
+            after = self.vision.observe_page(visible=True)
+            state = after.get('state',{})
+            remaining = [b for b in state.get('regions',{}).get('composer',[]) if normalize_text(b['text']) == normalize_text(text)]
+            outgoing = [b for b in after.get('boxes',[]) if normalize_text(b['text']) == normalize_text(text)
+                        and b['x']+b['w']/2 > size[0]*.6 and b['y'] < frame['y']]
+            import numpy as np
 
-        image = getattr(self.vision, '_last_observed_image', None)
-        green_outgoing = []
-        for box in outgoing:
-            if image is None:
-                continue
-            pixels = np.asarray(image.crop((box['x'],box['y'],box['x']+box['w'],box['y']+box['h'])))
-            if pixels.size and ((pixels[:,:,1] > 100) & (pixels[:,:,1] > pixels[:,:,0].astype(float)*1.25)
-                                & (pixels[:,:,1] > pixels[:,:,2].astype(float)*1.15)).mean() >= .2:
-                green_outgoing.append(box)
-        failure = any('发送失败' in b['text'] or '消息已发出，但被对方拒收' in b['text']
-                      for b in after.get('boxes',[]))
-        verified = after.get('ok') and not remaining and len(green_outgoing) > previous_matches and not failure
-        return self._receipt('send_current_verified_text', success=bool(verified), dispatched=True,
-                             sent=bool(verified), delivery_verified=False, automatic_retry=False,
-                             verified_by='outgoing_text_and_cleared_draft' if verified else 'result_unknown')
+            image = getattr(self.vision, '_last_observed_image', None)
+            green_outgoing = []
+            for box in outgoing:
+                if image is None:
+                    continue
+                pixels = np.asarray(image.crop((box['x'],box['y'],box['x']+box['w'],box['y']+box['h'])))
+                if pixels.size and ((pixels[:,:,1] > 100) & (pixels[:,:,1] > pixels[:,:,0].astype(float)*1.25)
+                                    & (pixels[:,:,1] > pixels[:,:,2].astype(float)*1.15)).mean() >= .2:
+                    green_outgoing.append(box)
+            failure = any('发送失败' in b['text'] or '消息已发出，但被对方拒收' in b['text']
+                          for b in after.get('boxes',[]))
+            metadata = self._app.describe_window(self._app.handle)
+            same_recipient = (
+                all(metadata[k] == lease['metadata'][k] for k in ('hwnd','pid','rect','client_rect','dpi'))
+                and not any(not w['is_main'] for w in self._app.list_windows())
+                and state.get('size') == size
+                and not state.get('overlays')
+                and state.get('composer',{}).get('state') == 'present'
+                and sum(normalize_text(b['text']) == normalize_text(lease['query'])
+                        for b in state.get('regions',{}).get('conversation_header', [])) == 1
+            )
+            verified = (after.get('ok') and same_recipient and not remaining
+                        and len(green_outgoing) > previous_matches and not failure)
+            return self._receipt('send_current_verified_text', success=bool(verified), dispatched=True,
+                                 sent=bool(verified), delivery_verified=False, automatic_retry=False,
+                                 verified_by='outgoing_text_and_cleared_draft' if verified else 'result_unknown')
+        except Exception as exc:
+            # Dispatch may already have reached the HWND. Preserve uncertainty
+            # even when the subsequent screenshot/OCR or driver receipt fails.
+            return self._receipt('send_current_verified_text', success=False, dispatched=True,
+                                 sent=False, delivery_verified=False, automatic_retry=False,
+                                 verified_by='result_unknown', error_type=type(exc).__name__)
 
     def open_search_content(self, query: str) -> dict:
         """Open the exact verified main-field query in the embedded network pane."""
@@ -932,6 +1038,21 @@ class BasicSkill(BaseSkill):
                     raise RuntimeError("An auxiliary popup must be handled before main navigation")
         if spec.method == "wm_close" and target.handle == self._app.handle:
             raise PermissionError("Use navigation to leave an embedded page; main client cannot be closed")
+        # An already visible, unobstructed chat needs no sidebar click. Unread
+        # badges can obscure that glyph; this observation proves only the page,
+        # never the recipient identity or permission to type/send.
+        state = before['state']
+        if (operation == 'open_chats' and target.handle == self._app.handle
+                and source in spec.targets and page_keys(state) == {source}
+                and not state.get('panels') and not state.get('overlays')
+                and not state.get('content_windows')
+                and all(w['is_main'] for w in windows_before)):
+            return self._receipt(
+                'page_operation', operation=operation, success=True,
+                verified_by='current_unobstructed_target_page',
+                source_page=source, after_pages=[source],
+                input_dispatched=False, already_at_target=True, sent=False,
+            )
         skill = self if target.handle == self._app.handle else BasicSkill(
             target, self._config, self._session)
         # Popup activation dismisses Qt menus; preserve their current focus.
@@ -939,9 +1060,9 @@ class BasicSkill(BaseSkill):
         old_mode = driver.foreground_mode
         if target.handle != self._app.handle:
             driver.foreground_mode = "never"
-        elif operation == "open_main_menu":
-            # Returning focus to another application immediately dismisses
-            # this menu. Keep the client foreground until it is handled.
+        elif operation in {"open_main_menu", "open_moments"}:
+            # Menus dismiss and Moments activation can be lost when focus
+            # returns before Qt finishes opening the content. Keep it foreground.
             driver.foreground_mode = "leave"
         point = None
         used_layout = "observed_frame"
@@ -1485,78 +1606,148 @@ class BasicSkill(BaseSkill):
                                                  (frame['y'] + frame['h'] * .3) / height)
 
     def prepare_text(self, contact: str, text: str) -> dict:
-        navigation = self.open_chat(contact)
-        if navigation.get('opened') is not True:
-            raise ChatNotFoundError('chat_not_opened_or_verified')
-        self._focus_input()
-        self.keyboard_only._type_text(text)
-        return {"action": "prepare_text", "transport": "hwnd", "navigation": navigation,
-                "sent": False}
+        """Prepare only in the current stable recipient's verified empty composer.
 
-    def send_text(self, contact: str, text: str, *, confirm: bool = False) -> dict:
+        ``contact`` is the verified local username, not a search/display name.
+        This method never navigates, replaces an existing draft, or sends.
+        """
+        from wechat_auto.primitives.vision import normalize_text
+
+        lease = getattr(self, '_recipient_lease', None)
+        if not lease or lease.get('username') != contact:
+            raise PermissionError('Stable contact must match the current verified recipient')
+        if not text or any(ord(c) < 32 for c in text):
+            raise ValueError('A nonempty printable draft body is required')
+        self._activate()
+        before, body, frame = self._checked_recipient_composer(lease)
+        if body:
+            raise RuntimeError('Existing draft present; no typing')
+        size = before['state']['size']
+        self.keyboard_only.click_window_fraction((frame['x']+frame['w']/2)/size[0],
+                                                 (frame['y']+frame['h']*.3)/size[1])
+        self.keyboard_only._type_text(text)
+        time.sleep(self._config.action_delay + .5)
+        _, body, current_frame = self._checked_recipient_composer(lease)
+        verified = body == normalize_text(text)
+        fingerprint = self._composer_fingerprint(current_frame) if verified else None
+        self._prepared_text_lease = ({'recipient': lease, 'body': body,
+                                     'frame': current_frame.copy(), 'fingerprint': fingerprint,
+                                     'original_text': text,
+                                     'expires_at': time.monotonic() + 120}
+                                    if fingerprint else None)
+        return self._receipt('prepare_text', success=verified, prepared=verified,
+                             input_dispatched=True, sent=False,
+                             cancellation_available=bool(fingerprint),
+                             verified_by='verified_recipient_and_draft_ocr' if verified else 'draft_not_verified')
+
+    def _composer_fingerprint(self, frame: dict) -> str | None:
+        """Keep a private in-memory exact frame digest; never guess unseen edits."""
+        import hashlib
+
+        from PIL import Image
+
+        image = getattr(self.vision, '_last_observed_image', None)
+        if not isinstance(image, Image.Image):
+            return None
+        x, y, w, h = (int(frame[k]) for k in ('x', 'y', 'w', 'h'))
+        if x < 0 or y < 0 or w <= 0 or h <= 0 or x+w > image.width or y+h > image.height:
+            return None
+        return hashlib.sha256(image.crop((x, y, x+w, y+h)).convert('RGB').tobytes()).hexdigest()
+
+    def cancel_prepared_text(self, contact: str) -> dict:
+        """Clear only this instance's own unchanged, observed draft, once.
+
+        Exact pixels are deliberately conservative: even a caret-only change
+        can refuse cancellation. Refusal never authorizes a raw clear fallback.
+        """
+        draft = getattr(self, '_prepared_text_lease', None)
+        lease = getattr(self, '_recipient_lease', None)
+        if (not draft or lease is not draft['recipient'] or lease.get('username') != contact
+                or time.monotonic() > draft['expires_at']):
+            raise PermissionError('Current owned draft lease required')
+        self._activate()
+        observation, body, frame = self._checked_recipient_composer(lease)
+        if (body != draft['body'] or frame != draft['frame']
+                or self._composer_fingerprint(frame) != draft['fingerprint']):
+            raise RuntimeError('Prepared draft changed; no cancellation dispatched')
+        original = draft.get('original_text')
+        if not isinstance(original, str) or not 1 <= len(original.encode('utf-16-le')) // 2 <= 10000:
+            raise RuntimeError('Bounded original draft text required')
+        from wechat_auto.primitives.attachment_observer import has_card_sized_rectangle
+
+        image = getattr(self.vision, '_last_observed_image', None)
+        boxes = sorted(observation.get('_composer_body_boxes', []), key=lambda box: (box['y'], box['x']))
+        if image is None or has_card_sized_rectangle(image, frame, 45) or not boxes:
+            raise RuntimeError('Exact text-only draft end unavailable')
+        self._prepared_text_lease = None
+        size = observation['state']['size']
+        last = boxes[-1]
+        end = (min(frame['x']+frame['w']-1, last['x']+last['w']+last['h']*.15)/size[0],
+               (last['y']+last['h']/2)/size[1])
+        clear_dispatched = False
+        try:
+            self.keyboard_only.click_window_fraction(*end)
+            # Recheck after focus before issuing any destructive editor keys.
+            _, current_body, current_frame = self._checked_recipient_composer(lease)
+            if (current_body != body or current_frame != frame
+                    or time.monotonic() > draft['expires_at']
+                    or self._composer_fingerprint(frame) != draft['fingerprint']):
+                return self._receipt('cancel_prepared_text', success=False, cancelled=False,
+                                     sent=False, clear_dispatched=False,
+                                     verified_by='draft_changed_after_focus', automatic_retry=False)
+            with self.keyboard_only.foreground_lease():
+                clear_dispatched = True
+                self.keyboard_only.erase_backward(len(original.encode('utf-16-le')) // 2)
+            time.sleep(self._config.action_delay + .5)
+            _, remaining, _ = self._checked_recipient_composer(lease)
+            return self._receipt('cancel_prepared_text', success=not remaining,
+                                 cancelled=not remaining, clear_dispatched=True, sent=False,
+                                 verified_by='empty_composer_observed' if not remaining else 'result_unknown',
+                                 automatic_retry=False)
+        except Exception as exc:
+            return self._receipt('cancel_prepared_text', success=False, cancelled=False,
+                                 sent=False, clear_dispatched=clear_dispatched,
+                                 verified_by='result_unknown', automatic_retry=False,
+                                 error_type=type(exc).__name__)
+
+    def send_text(self, contact: str, text: str, *, confirm: bool = False,
+                  before_dispatch: Callable[[], None] | None = None) -> dict:
         if not confirm:
             raise PermissionError("Sending requires confirm=True")
-        result = self.prepare_text(contact, text)
-        self.keyboard_only._enter()
-        result.update(action="send_text", sent=True)
-        return result
+        lease = getattr(self, '_recipient_lease', None)
+        if not lease or lease.get('username') != contact:
+            raise PermissionError('Stable contact must match the current verified recipient')
+        if before_dispatch is None:
+            return self.send_current_verified_text(text, confirm=True)
+        return self.send_current_verified_text(text, confirm=True, before_dispatch=before_dispatch)
 
     def prepare_mention(self, contact: str, member: str, text: str = "") -> dict:
-        """Prepare a group @ draft through the focused WeChat editor.
-
-        WeChat may require selecting the popup suggestion to turn the typed
-        label into a real mention.  This method intentionally leaves that
-        selection visible for confirmation instead of guessing a menu point.
-        """
+        """Prepare only plain draft text; a verified mention chip is not supported."""
         if not member.strip():
             raise ValueError("member must not be empty")
-        navigation = self.open_chat(contact)
-        self._focus_input()
-        self.keyboard_only._type_text(f"@{member}")
-        if text:
-            self.keyboard_only._type_text(f" {text}")
-        return {"action": "prepare_mention", "transport": "hwnd", "navigation": navigation,
-                "member": member, "text": text, "sent": False,
-                "selection_required": True}
+        lease = getattr(self, '_recipient_lease', None)
+        if not lease or lease.get('username') != contact or not contact.endswith('@chatroom'):
+            raise PermissionError('Stable verified group recipient required')
+        # prepare_text checks the current recipient and an empty composer before
+        # any input, then reads the exact body back. Never accept suggestions by
+        # Enter: without an observed popup that key could send the draft.
+        result = self.prepare_text(contact, f"@{member}" + (f" {text}" if text else ""))
+        result.update(action='prepare_mention', member=member, text=text, sent=False,
+                      mention_verified=False, selection_required=True)
+        return result
 
     def send_mention(self, contact: str, member: str, text: str = "", *,
                      confirm: bool = False) -> dict:
         if not confirm:
             raise PermissionError("Mention send requires confirm=True")
-        navigation = self.open_chat(contact)
-        self._focus_input()
-        self.keyboard_only._type_text(f"@{member}")
-        # In WeChat's group editor, Enter accepts the highlighted @ suggestion.
-        # If no suggestion is shown, the explicit-confirmation boundary still
-        # prevents this path from running accidentally.
-        self.keyboard_only._enter()
-        if text:
-            self.keyboard_only._type_text(text)
-        self.keyboard_only._enter()
-        result = {"action": "send_mention", "transport": "hwnd", "navigation": navigation,
-                  "member": member, "text": text, "sent": True,
-                  "suggestion_selected_by": "enter"}
-        return result
+        if not member.strip():
+            raise ValueError("member must not be empty")
+        raise PermissionError('Verified group/member selection and mention chip required; no send dispatched')
 
     def prepare_quote(self, contact: str, message: tuple[float, float],
                       quote_menu: tuple[float, float] | None = None, text: str = "") -> dict:
-        """Open the context menu and prepare a reply using current-frame points.
-
-        Caller points must be freshly observed; no stored calibration is loaded.
-        This method itself only dispatches HWND messages.
-        """
-        navigation = self.open_chat(contact)
-        self.right_click(*message)
-        time.sleep(self._config.click_delay)
-        if quote_menu is None:
-            quote_menu = self._choose_context_menu_item(self._config.kw_quote)
-        self.click(*quote_menu)
-        if text:
-            self._focus_input()
-            self.keyboard_only._type_text(text)
-        return {"action": "prepare_quote", "transport": "hwnd", "navigation": navigation,
-                "message_point": list(message), "quote_menu": list(quote_menu),
-                "text": text, "sent": False}
+        """Legacy bare points do not prove a current message or quote target."""
+        raise PermissionError('Current-frame message identity and quote preview required; no quote action dispatched')
 
     def send_quote(self, contact: str, message: tuple[float, float],
                    quote_menu: tuple[float, float] | None = None, text: str = "", *,
@@ -1565,10 +1756,9 @@ class BasicSkill(BaseSkill):
             raise PermissionError("Quote reply requires confirm=True")
         if not text.strip():
             raise ValueError("text must not be empty")
-        result = self.prepare_quote(contact, message, quote_menu, text)
-        self.keyboard_only._enter()
-        result.update(action="send_quote", sent=True)
-        return result
+        # No prepared quote identity exists yet. A boolean confirmation cannot
+        # authenticate an arbitrary message/menu coordinate or a quote chip.
+        raise PermissionError('Current-frame message identity and quote preview required; no send dispatched')
 
     def copy_message(self, message: tuple[float, float], *, contact: str | None = None,
                      copy_menu: tuple[float, float] | None = None) -> dict:
@@ -1579,6 +1769,8 @@ class BasicSkill(BaseSkill):
         into OCR observation for a unique ``复制`` menu label.
         """
         navigation = self.open_chat(contact) if contact else None
+        if contact and navigation.get('opened') is not True:
+            raise ChatNotFoundError('chat_not_opened_or_verified')
         self.right_click(*message)
         time.sleep(self._config.click_delay)
         if copy_menu is None:
@@ -1595,6 +1787,8 @@ class BasicSkill(BaseSkill):
         if profile_entry is None:
             return self.open_contact_profile(contact, expected_wechat_id)
         navigation = self.open_chat(contact)
+        if navigation.get('opened') is not True:
+            raise ChatNotFoundError('chat_not_opened_or_verified')
         self.click(*profile_entry)
         time.sleep(self._config.action_delay)
         return {"action": "prepare_profile_observation", "transport": "hwnd",
@@ -1673,44 +1867,652 @@ class BasicSkill(BaseSkill):
                 "signature_observed": result["observed"], "status": result["status"],
                 "changed_fields": result["changed_fields"]}
 
-    def _prepare_clipboard_payload(self, contact: str, setter, value: str) -> dict:
-        navigation = self.open_chat(contact)
+    def open_composer_context_menu(self, contact: str, *, expected_text: str | None = None) -> dict:
+        """Open an empty editor or an explicitly matched text draft's menu."""
+        from wechat_auto.primitives.vision import normalize_text
+
+        lease = getattr(self, '_recipient_lease', None)
+        if not lease or lease.get('username') != contact:
+            raise PermissionError('Stable contact must match the current verified recipient')
+        self._activate()
+        observation, body, frame = self._checked_recipient_composer(lease)
+        if expected_text is not None:
+            if not expected_text.strip() or body != normalize_text(expected_text):
+                raise RuntimeError('Draft differs from expected text; no composer menu opened')
+        elif body:
+            raise RuntimeError('Existing draft present; no composer menu opened')
+        self._composer_menu_origin = None
+        width, height = observation['state']['size']
+        boxes = observation.get('_composer_body_boxes', [])
+        if expected_text is not None:
+            if not boxes:
+                raise RuntimeError('Current text position unavailable; no composer menu opened')
+            point = self._box_center_fraction(boxes[0], (width, height))
+        else:
+            point = ((frame['x']+frame['w']/2)/width, (frame['y']+frame['h']*.3)/height)
+        self.keyboard_only.right_click_window_fraction(*point)
+        self._composer_menu_origin = {'recipient': lease, 'created_at': time.monotonic()}
+        time.sleep(self._config.click_delay + .5)
+        return self._receipt('open_composer_context_menu', sent=False, input_dispatched=True,
+                             success=False, verified_by='menu_observation_required')
+
+    def copy_text_draft_identity(self, contact: str, text: str) -> dict:
+        """Prove literal draft text through HWND selection and native Copy."""
+        import hashlib
+        from uuid import uuid4
+
+        import win32clipboard
+        from PIL import Image
+
+        from wechat_auto.primitives.attachment_observer import has_card_sized_rectangle
+        from wechat_auto.primitives.vision import normalize_text
+        from wechat_auto.utils.screenshot import ScreenshotHelper
+
+        if not text or any(ord(c) < 32 for c in text):
+            raise ValueError('Exact printable text required')
+        lease = getattr(self, '_recipient_lease', None)
+        if not lease or lease.get('username') != contact:
+            raise PermissionError('Verified stable recipient required')
+        self._activate()
+
+        def checked(popup=None):
+            observation, body, frame = self._checked_recipient_composer(lease, allowed_popup=popup)
+            image = getattr(self.vision, '_last_observed_image', None)
+            if (body != normalize_text(text) or not isinstance(image, Image.Image)
+                    or has_card_sized_rectangle(image, frame, 45)):
+                raise RuntimeError('Exact text-only draft not verified; no Copy dispatched')
+            return observation, frame
+
+        before, frame = checked()
+        boxes = sorted(before.get('_composer_body_boxes', []), key=lambda b: (b['y'], b['x']))
+        if not boxes:
+            raise RuntimeError('Current text selection bounds unavailable')
+        width, height = before['state']['size']
+        first, last = boxes[0], boxes[-1]
+        start = (max(frame['x'] + 2, first['x'] - first['h'] * .5) / width,
+                 (first['y'] + first['h'] / 2) / height)
+        end = ((frame['x'] + frame['w'] - 3) / width,
+               (last['y'] + last['h'] / 2) / height)
+        ClipboardHelper.set_text('wechat-auto-text-copy-' + uuid4().hex)
+        sequence = win32clipboard.GetClipboardSequenceNumber()
+        self.keyboard_only.drag_window_fraction(start, end)
+        labels = {'复制', '复制(ctrl+c)', '复制ctrl+c', '复制（ctrl+c）'}
+        started = time.monotonic()
+        self.open_composer_context_menu(contact, expected_text=text)
+        current, target, menu, observation = self._consume_composer_context_menu()
+        if current is not lease or checked(menu)[1] != frame:
+            raise StaleFrameError('Text recipient or composer changed')
+        matches = [b for b in observation.get('boxes', []) if b.get('score', 0) >= .65
+                   and normalize_text(b['text']).casefold() in labels]
+        size = observation.get('state', {}).get('size')
+        if (len(matches) != 1 or size != [menu['rect'][2]-menu['rect'][0],
+                                         menu['rect'][3]-menu['rect'][1]]):
+            raise RuntimeError('Exact native text menu control unavailable')
+        image = ScreenshotHelper().capture_window(menu['hwnd'])
+        if (image is None or not observation.get('_menu_frame_sha256')
+                or hashlib.sha256(image.convert('RGB').tobytes()).hexdigest()
+                != observation['_menu_frame_sha256']):
+            raise StaleFrameError('Native text menu pixels changed')
+        if (time.monotonic() - started > 120 or self._recipient_lease is not lease
+                or win32clipboard.GetClipboardSequenceNumber() != sequence
+                or self._app.describe_window(menu['hwnd']) != menu):
+            raise StaleFrameError('Text menu or clipboard changed before dispatch')
+        child = BasicSkill(target, self._config, self._session)
+        child.keyboard_only.foreground_mode = 'never'
+        child.keyboard_only.click_window_fraction(*self._box_center_fraction(matches[0], tuple(size)))
+        time.sleep(self._config.action_delay + .5)
+        copied_sequence = win32clipboard.GetClipboardSequenceNumber()
+        literal_match = copied_sequence != sequence and ClipboardHelper.get_text() == text
+        _, current_frame = checked()
+        verified = (literal_match and current_frame == frame
+                    and win32clipboard.GetClipboardSequenceNumber() == copied_sequence)
+        return self._receipt('copy_text_draft_identity', success=bool(verified),
+                             identity_verified=bool(verified), sent=False,
+                             deletion_dispatched=False, automatic_retry=False,
+                             verified_by='native_literal_text_copy' if verified else 'literal_text_not_verified')
+
+    def delete_verified_text(self, contact: str, text: str, *, confirm_discard: bool = False) -> dict:
+        """Delete an explicitly approved exact draft through native editor characters."""
+        from wechat_auto.primitives.attachment_observer import has_card_sized_rectangle
+        from wechat_auto.primitives.vision import normalize_text
+
+        if not confirm_discard:
+            raise PermissionError('Deleting the current draft requires explicit confirmation')
+        lease = getattr(self, '_recipient_lease', None)
+        if not lease or lease.get('username') != contact or not text.strip():
+            raise PermissionError('Verified recipient and exact nonempty draft required')
+        expected = normalize_text(text)
+        observation, body, frame = self._checked_recipient_composer(lease)
+        if body != expected:
+            raise RuntimeError('Draft differs from explicitly approved text; no deletion')
+        image = getattr(self.vision, '_last_observed_image', None)
+        if image is None or has_card_sized_rectangle(image, frame, 45):
+            raise RuntimeError('Non-text draft content cannot be discarded as text')
+        boxes = sorted(observation.get('_composer_body_boxes', []), key=lambda box: (box['y'], box['x']))
+        if not boxes:
+            raise RuntimeError('Exact draft text position unavailable')
+        width, height = observation['state']['size']
+        last = boxes[-1]
+        end = (min(frame['x']+frame['w']-1, last['x']+last['w']+last['h']*.15)/width,
+               (last['y']+last['h']/2)/height)
+        self.keyboard_only.click_window_fraction(*end)
+        _, current_body, current_frame = self._checked_recipient_composer(lease)
+        if current_body != expected or current_frame != frame:
+            raise RuntimeError('Draft changed after focus; no deletion')
+        self._prepared_text_lease = None
+        self.keyboard_only.erase_backward(len(text.encode('utf-16-le')) // 2)
+        time.sleep(self._config.action_delay + .5)
+        _, remaining, _ = self._checked_recipient_composer(lease)
+        return self._receipt('delete_verified_text', success=not remaining, deleted=not remaining,
+                             delete_dispatched=True, sent=False, automatic_retry=False,
+                             verified_by='empty_composer_observed' if not remaining else 'result_unknown')
+
+    def _consume_composer_context_menu(self, *, expected_origin_id: str | None = None):
+        from wechat_auto.primitives.vision import VisionAutomation, normalize_text
+
+        origin = getattr(self, '_composer_menu_origin', None)
+        self._composer_menu_origin = None
+        lease = getattr(self, '_recipient_lease', None)
+        if (not origin or lease is not origin['recipient']
+                or time.monotonic()-origin['created_at'] > 120):
+            raise PermissionError('Current composer menu origin required')
+        if expected_origin_id is not None and origin.get('origin_id') != expected_origin_id:
+            raise PermissionError('Composer menu origin was replaced')
+        main = self._app.describe_window(self._app.handle)
+        if any(main[k] != lease['metadata'][k] for k in ('hwnd', 'pid', 'rect', 'client_rect', 'dpi')):
+            raise RuntimeError('Composer owner changed; no dismissal dispatched')
+        auxiliary = [w for w in self._app.list_windows() if not w['is_main']]
+        if (len(auxiliary) != 1 or auxiliary[0]['pid'] != main['pid']
+                or auxiliary[0]['owner_hwnd'] != self._app.handle
+                or 'ToolSaveBits' not in auxiliary[0]['class']):
+            raise RuntimeError('Unique owned composer menu unavailable')
+        before = auxiliary[0]
+        target = self._app.for_window(before['hwnd'])
+        observer = VisionAutomation(target, self._config)
+        observation = observer.observe_page()
+        from PIL import Image
+
+        image = getattr(observer, '_last_observed_image', None)
+        if isinstance(image, Image.Image):
+            import hashlib
+
+            observation['_menu_frame_sha256'] = hashlib.sha256(image.convert('RGB').tobytes()).hexdigest()
+        labels = {normalize_text(b['text']).casefold() for b in observation.get('boxes', [])}
+        paste = {'粘贴', '粘贴(ctrl+v)', '粘贴（ctrl+v）', '粘贴ctrl+v'}
+        editing = {'全选', '全选(ctrl+a)', '全选ctrl+a', '剪切', '复制', '边写边译'}
+        image_menu = (origin.get('kind') == 'image_preview'
+                      and {'剪切', '复制', '编辑'} <= labels
+                      and any(label.rstrip('.。…') == '另存为' for label in labels))
+        if not observation.get('ok') or not (image_menu or (labels & paste and labels & editing)):
+            raise RuntimeError('Composer menu anchors absent; no dismissal dispatched')
+        after = self._app.describe_window(before['hwnd'])
+        if any(before[k] != after[k] for k in ('hwnd', 'pid', 'rect', 'client_rect', 'dpi', 'owner_hwnd', 'class')):
+            raise StaleFrameError('Composer menu changed during observation')
+        return lease, target, before, observation
+
+    def dismiss_composer_context_menu(self) -> dict:
+        """Dismiss only this instance's newly opened, observed editor menu."""
+        _, target, before, _ = self._consume_composer_context_menu()
+        child = BasicSkill(target, self._config, self._session)
+        child.keyboard_only.foreground_mode = 'never'
+        child.keyboard_only.press_key('escape')
+        time.sleep(self._config.click_delay + .5)
+        dismissed = all(w['hwnd'] != before['hwnd'] for w in self._app.list_windows())
+        return self._receipt('dismiss_composer_context_menu', success=dismissed, sent=False,
+                             input_dispatched=True, verified_by='owned_menu_disappeared' if dismissed else 'result_unknown')
+
+    def _paste_attachment_via_menu(self, lease: dict, path: str, clipboard_matches) -> None:
+        """Select only this newly opened editor menu's exact Paste, once."""
+        from wechat_auto.primitives.vision import normalize_text
+
+        self.open_composer_context_menu(lease['username'])
+        current_lease, target, menu, observation = self._consume_composer_context_menu()
+        if current_lease is not lease:
+            raise RuntimeError('Recipient changed; no paste dispatched')
+        _, body, _ = self._checked_recipient_composer(lease, allowed_popup=menu)
+        if body:
+            raise RuntimeError('Draft changed while opening menu; no attachment pasted')
+        matches = [b for b in observation.get('boxes', []) if b.get('score', 0) >= .65
+                   and normalize_text(b['text']).casefold() in {
+                       '粘贴', '粘贴(ctrl+v)', '粘贴（ctrl+v）', '粘贴ctrl+v'}]
+        size = observation.get('state', {}).get('size')
+        if (len(matches) != 1 or size != [menu['rect'][2]-menu['rect'][0],
+                                         menu['rect'][3]-menu['rect'][1]]):
+            raise RuntimeError('Exact current Paste control absent or ambiguous')
+        if not clipboard_matches(path):
+            raise RuntimeError('Attachment clipboard payload changed; no attachment pasted')
+        fresh = self._app.describe_window(menu['hwnd'])
+        if any(fresh[k] != menu[k] for k in ('hwnd', 'pid', 'class', 'owner_hwnd', 'rect', 'client_rect', 'dpi')):
+            raise StaleFrameError('Composer menu changed before paste')
+        child = BasicSkill(target, self._config, self._session)
+        child.keyboard_only.foreground_mode = 'never'
+        child.keyboard_only.click_window_fraction(*self._box_center_fraction(matches[0], tuple(size)))
+
+    def _current_attachment_card(self, contact: str, path: str, *, allowed_popup: dict | None = None):
+        """Return only a current-frame candidate, never a send authorization."""
+        from wechat_auto.primitives.attachment_observer import find_file_card
+
+        lease = getattr(self, '_recipient_lease', None)
+        if not lease or lease.get('username') != contact:
+            raise PermissionError('Stable contact must match the current verified recipient')
+        payload = Path(path).resolve(strict=True)
+        if not payload.is_file():
+            raise ValueError('Expected a local file')
+        self._activate()
+        observation, _, frame = (self._checked_recipient_composer(lease) if allowed_popup is None
+                                  else self._checked_recipient_composer(lease, allowed_popup=allowed_popup))
+        card = find_file_card(self.vision._last_observed_image, observation['boxes'], frame,
+                              payload.name, payload.stat().st_size)
+        current = self._app.describe_window(self._app.handle)
+        if any(current[k] != lease['metadata'][k] for k in ('hwnd', 'pid', 'rect', 'client_rect', 'dpi')):
+            raise StaleFrameError('Attachment window changed before observation action')
+        return card, lease
+
+    def hover_attachment_card(self, contact: str, path: str) -> dict:
+        """Observe one current file-card candidate and request its tooltip only."""
+        card, _ = self._current_attachment_card(contact, path)
+        self.keyboard_only.hover_window_fraction(*card['window_fraction'])
+        time.sleep(self._config.action_delay + 1)
+        return self._receipt('hover_attachment_card', sent=False, input_dispatched=True,
+                             success=False, identity_verified=False, candidate=card,
+                             verified_by='tooltip_observation_required')
+
+    def open_attachment_context_menu(self, contact: str, path: str) -> dict:
+        """Open a candidate card's menu without selecting any command."""
+        from uuid import uuid4
+
+        card, lease = self._current_attachment_card(contact, path)
+        self._composer_menu_origin = None
+        self.keyboard_only.right_click_window_fraction(*card['window_fraction'])
+        origin_id = uuid4().hex
+        self._composer_menu_origin = {'recipient': lease, 'created_at': time.monotonic(),
+                                      'kind': 'attachment_card', 'candidate': card, 'origin_id': origin_id}
+        time.sleep(self._config.click_delay + .5)
+        return self._receipt('open_attachment_context_menu', sent=False, input_dispatched=True,
+                             success=False, identity_verified=False, candidate=card,
+                             menu_origin_id=origin_id,
+                             verified_by='menu_observation_required')
+
+    def copy_attachment_identity(self, contact: str, path: str) -> dict:
+        """Read an unsent card through native Copy; never Cut/Delete/Send."""
+        from uuid import uuid4
+
+        import win32clipboard
+
+        from wechat_auto.primitives.vision import normalize_text
+
+        payload = Path(path).resolve(strict=True)
+        expected_size = payload.stat().st_size
+        expected_hash = ClipboardHelper.file_sha256(payload)
+        self._attachment_identity_lease = None
+        self._current_attachment_card(contact, str(payload))
+        ClipboardHelper.set_text('wechat-auto-copy-check-' + uuid4().hex)
+        sequence = win32clipboard.GetClipboardSequenceNumber()
+        opened = self.open_attachment_context_menu(contact, str(payload))
+        origin = self._composer_menu_origin
+        if (not origin or origin.get('kind') != 'attachment_card'
+                or not opened.get('menu_origin_id') or opened['menu_origin_id'] != origin.get('origin_id')):
+            raise PermissionError('Attachment card menu origin required')
+        lease, target, menu, observation = self._consume_composer_context_menu(expected_origin_id=opened['menu_origin_id'])
+        card, current_lease = self._current_attachment_card(contact, str(payload), allowed_popup=menu)
+        if current_lease is not lease or card['box'] != origin['candidate']['box']:
+            raise StaleFrameError('Attachment card changed while observing its menu')
+        labels = {normalize_text(b['text']).casefold() for b in observation.get('boxes', [])}
+        if not {'剪切', '复制', '粘贴', '删除'} <= labels:
+            raise RuntimeError('Attachment selection menu anchors absent; no Copy dispatched')
+        copy = [b for b in observation.get('boxes', []) if b.get('score', 0) >= .65
+                and normalize_text(b['text']).casefold() in {'复制', '复制(ctrl+c)', '复制ctrl+c'}]
+        size = observation.get('state', {}).get('size')
+        if len(copy) != 1 or size != [menu['rect'][2]-menu['rect'][0], menu['rect'][3]-menu['rect'][1]]:
+            raise RuntimeError('Exact Copy control absent or ambiguous')
+        if win32clipboard.GetClipboardSequenceNumber() != sequence:
+            raise RuntimeError('Clipboard changed while observing Copy; no Copy dispatched')
+        if time.monotonic()-origin['created_at'] > 120:
+            raise PermissionError('Attachment Copy origin expired')
+        fresh = self._app.describe_window(menu['hwnd'])
+        if any(fresh[k] != menu[k] for k in ('hwnd', 'pid', 'class', 'owner_hwnd', 'rect', 'client_rect', 'dpi')):
+            raise StaleFrameError('Attachment menu changed before Copy')
+        child = BasicSkill(target, self._config, self._session)
+        child.keyboard_only.foreground_mode = 'never'
+        child.keyboard_only.click_window_fraction(*self._box_center_fraction(copy[0], tuple(size)))
+        time.sleep(self._config.action_delay + .5)
+        try:
+            verified = (win32clipboard.GetClipboardSequenceNumber() != sequence
+                        and ClipboardHelper.copied_file_matches(payload.name, expected_size, expected_hash)
+                        and payload.stat().st_size == expected_size
+                        and ClipboardHelper.file_sha256(payload) == expected_hash)
+        except Exception as exc:
+            return self._receipt('copy_attachment_identity', success=False, identity_verified=False,
+                                 sent=False, dispatched=True, automatic_retry=False,
+                                 verified_by='clipboard_result_unknown', error_type=type(exc).__name__)
+        if verified:
+            try:
+                current_card, current_lease = self._current_attachment_card(contact, str(payload))
+                rect = dict(zip(('x', 'y', 'w', 'h'), card['box'], strict=True))
+                digest = self._composer_fingerprint(rect)
+                verified = current_lease is lease and current_card['box'] == card['box'] and bool(digest)
+            except Exception as exc:
+                return self._receipt('copy_attachment_identity', success=False, identity_verified=False,
+                                     sent=False, dispatched=True, automatic_retry=False,
+                                     verified_by='clipboard_result_unknown', error_type=type(exc).__name__)
+            if verified:
+                self._attachment_identity_lease = {'recipient': lease, 'path': str(payload),
+                                                   'sha256': expected_hash, 'size': expected_size,
+                                                   'card': card, 'card_digest': digest,
+                                                   'created_at': time.monotonic()}
+        return self._receipt('copy_attachment_identity', success=bool(verified),
+                             identity_verified=bool(verified), sent=False, dispatched=True,
+                             automatic_retry=False, verified_by='copied_file_full_name_and_sha256'
+                             if verified else 'clipboard_file_identity_not_verified')
+
+    def cancel_verified_attachment(self, contact: str, path: str, *, confirm_discard: bool = False) -> dict:
+        """Remove only one freshly verified unsent card; never clear the editor."""
+        from wechat_auto.primitives.attachment_observer import (
+            has_card_sized_rectangle,
+            text_outside_card,
+        )
+        from wechat_auto.primitives.vision import normalize_text
+
+        if not confirm_discard:
+            raise PermissionError('Explicit discard of this verified draft attachment required')
+        identity = getattr(self, '_attachment_identity_lease', None)
+        lease = getattr(self, '_recipient_lease', None)
+        if (not identity or lease is not identity['recipient'] or lease.get('username') != contact
+                or time.monotonic()-identity['created_at'] > 120
+                or Path(path).resolve(strict=True) != Path(identity['path'])):
+            raise PermissionError('Current verified attachment identity required')
+        self._attachment_identity_lease = None
+        payload = Path(identity['path'])
+        if payload.stat().st_size != identity['size'] or ClipboardHelper.file_sha256(payload) != identity['sha256']:
+            raise RuntimeError('Verified source changed; no draft cancellation dispatched')
+        card, current_lease = self._current_attachment_card(contact, str(payload))
+        if current_lease is not lease or card['box'] != identity['card']['box']:
+            raise StaleFrameError('Verified attachment card changed')
+        observation, _, _ = self._checked_recipient_composer(lease)
+        outside = text_outside_card(observation['_composer_body_boxes'], card['box'])
+        if outside:
+            raise RuntimeError('Other draft text present; no attachment cancellation dispatched')
+        rect = dict(zip(('x', 'y', 'w', 'h'), card['box'], strict=True))
+        digest = self._composer_fingerprint(rect)
+        if not digest or digest != identity.get('card_digest'):
+            raise StaleFrameError('Attachment card differs from the verified identity frame')
+        opened = self.open_attachment_context_menu(contact, str(payload))
+        if not opened.get('menu_origin_id'):
+            raise PermissionError('Draft cancellation menu origin missing')
+        current_lease, target, menu, menu_observation = self._consume_composer_context_menu(expected_origin_id=opened['menu_origin_id'])
+        current_card, _ = self._current_attachment_card(contact, str(payload), allowed_popup=menu)
+        current_observation, _, _ = self._checked_recipient_composer(lease, allowed_popup=menu)
+        labels = {normalize_text(b['text']) for b in menu_observation.get('boxes', [])}
+        changes = {
+            'recipient': current_lease is not lease,
+            'card_geometry': current_card['box'] != card['box'],
+            'card_pixels': self._composer_fingerprint(rect) != digest,
+            'other_text': text_outside_card(current_observation['_composer_body_boxes'], card['box']) != outside,
+            'menu_anchors': not {'剪切', '复制', '粘贴', '删除'} <= labels,
+            'expired': time.monotonic()-identity['created_at'] > 120,
+        }
+        if any(changes.values()):
+            raise StaleFrameError('Draft cancellation blocked: ' + ','.join(k for k, changed in changes.items() if changed))
+        buttons = [b for b in menu_observation.get('boxes', [])
+                   if normalize_text(b['text']) == '删除' and b.get('score', 0) >= .65]
+        size = menu_observation.get('state', {}).get('size')
+        if len(buttons) != 1 or size != [menu['rect'][2]-menu['rect'][0], menu['rect'][3]-menu['rect'][1]]:
+            raise RuntimeError('Exact draft removal control unavailable')
+        fresh = self._app.describe_window(menu['hwnd'])
+        if any(fresh[k] != menu[k] for k in ('hwnd', 'pid', 'class', 'owner_hwnd', 'rect', 'client_rect', 'dpi')):
+            raise StaleFrameError('Attachment menu changed before draft cancellation')
+        if payload.stat().st_size != identity['size'] or ClipboardHelper.file_sha256(payload) != identity['sha256']:
+            raise RuntimeError('Verified source changed before draft cancellation')
+        child = BasicSkill(target, self._config, self._session)
+        child.keyboard_only.foreground_mode = 'never'
+        try:
+            child.keyboard_only.click_window_fraction(*self._box_center_fraction(buttons[0], tuple(size)))
+            time.sleep(self._config.action_delay + .5)
+            after, _, frame = self._checked_recipient_composer(lease)
+            remaining = has_card_sized_rectangle(self.vision._last_observed_image, frame, card['box'][3]*.6)
+            preserved = text_outside_card(after['_composer_body_boxes'], [0, 0, 0, 0]) == outside
+            source_ok = payload.stat().st_size == identity['size'] and ClipboardHelper.file_sha256(payload) == identity['sha256']
+            verified = not remaining and preserved and source_ok
+            return self._receipt('cancel_verified_attachment', success=verified, cancelled=verified,
+                                 dispatched=True, sent=False, automatic_retry=False,
+                                 verified_by='card_absent_other_text_and_source_preserved' if verified else 'result_unknown')
+        except Exception as exc:
+            return self._receipt('cancel_verified_attachment', success=False, cancelled=False,
+                                 dispatched=True, sent=False, automatic_retry=False,
+                                 verified_by='result_unknown', error_type=type(exc).__name__)
+
+    def _prepare_clipboard_payload(self, contact: str, setter, value: str, *, clipboard_matches) -> dict:
+        lease = getattr(self, '_recipient_lease', None)
+        if not lease or lease.get('username') != contact:
+            raise PermissionError('Stable contact must match the current verified recipient')
         path = Path(value).expanduser().resolve(strict=True)
         if not path.is_file():
             raise ValueError(f"Expected a file: {path}")
+        self._activate()
+        _, body, _ = self._checked_recipient_composer(lease)
+        if body:
+            raise RuntimeError('Existing draft present; no attachment pasted')
         setter(str(path))
-        self._focus_input()
-        self.keyboard_only._paste()
-        return {"transport": "hwnd", "navigation": navigation,
-                "path": str(path), "sent": False}
+        # Clipboard conversion may be slow. Observe again before touching the
+        # editor; a previous successful identity check cannot authorize a new page.
+        observation, body, frame = self._checked_recipient_composer(lease)
+        if body:
+            raise RuntimeError('Existing draft appeared; no attachment pasted')
+        width, height = observation['state']['size']
+        self.keyboard_only.click_window_fraction((frame['x']+frame['w']/2)/width,
+                                                 (frame['y']+frame['h']*.3)/height)
+        _, body, _ = self._checked_recipient_composer(lease)
+        if body:
+            raise RuntimeError('Draft changed after focus; no attachment pasted')
+        if not clipboard_matches(str(path)):
+            raise RuntimeError('Attachment clipboard payload changed; no attachment pasted')
+        self._paste_attachment_via_menu(lease, str(path), clipboard_matches)
+        return {"transport": "hwnd", "path": str(path), "sent": False,
+                "paste_method": "owned_composer_menu",
+                "input_dispatched": True, "prepared": False,
+                "verified_by": "attachment_preview_not_verified"}
 
     def prepare_file(self, contact: str, path: str) -> dict:
+        self._attachment_identity_lease = None
+        payload = Path(path).expanduser().resolve(strict=True)
+        if not payload.is_file():
+            raise ValueError('Expected a local file')
+        expected_size = payload.stat().st_size
+        expected_hash = ClipboardHelper.file_sha256(payload)
+        recipient = getattr(self, '_recipient_lease', None)
         result = self._prepare_clipboard_payload(
-            contact, lambda value: ClipboardHelper.set_files([value]), path
+            contact, lambda value: ClipboardHelper.set_files([value]), str(payload),
+            clipboard_matches=lambda value: ClipboardHelper.files_match([value]),
         )
-        result["action"] = "prepare_file"
+        result.update(action='prepare_file', success=False, identity_verified=False,
+                      automatic_retry=False)
+        try:
+            if (payload.stat().st_size != expected_size
+                    or ClipboardHelper.file_sha256(payload) != expected_hash):
+                raise RuntimeError('Source changed during attachment preparation')
+            copied = self.copy_attachment_identity(contact, str(payload))
+            identity = getattr(self, '_attachment_identity_lease', None)
+            verified = bool(copied.get('identity_verified') and identity
+                            and identity.get('recipient') is recipient
+                            and getattr(self, '_recipient_lease', None) is recipient
+                            and identity.get('path') == str(payload)
+                            and identity.get('size') == expected_size
+                            and identity.get('sha256') == expected_hash
+                            and identity.get('card_digest')
+                            and 0 <= time.monotonic()-identity['created_at'] <= 120
+                            and payload.stat().st_size == expected_size
+                            and ClipboardHelper.file_sha256(payload) == expected_hash)
+            if verified:
+                result.update(prepared=True, success=True, identity_verified=True,
+                              verified_by='prepared_file_full_identity_and_current_card')
+            else:
+                self._attachment_identity_lease = None
+        except Exception as exc:
+            self._attachment_identity_lease = None
+            result['error_type'] = type(exc).__name__
         return result
 
     def send_file(self, contact: str, path: str, *, confirm: bool = False) -> dict:
         if not confirm:
             raise PermissionError("File send requires confirm=True")
-        result = self.prepare_file(contact, path)
-        self.keyboard_only._enter()
-        result.update(action="send_file", sent=True)
-        return result
+        # Preparation is independently useful, but its receipt cannot release
+        # the old blind Enter path. Submission needs its own current-frame
+        # payload/recipient check and an observable outgoing-file verifier.
+        raise PermissionError('Current file submission and result verification required; no send dispatched')
 
     def prepare_image(self, contact: str, path: str) -> dict:
-        result = self._prepare_clipboard_payload(contact, ClipboardHelper.set_image, path)
-        result["action"] = "prepare_image"
+        payload = Path(path).expanduser().resolve(strict=True)
+        original_hash = ClipboardHelper.file_sha256(payload)
+        recipient = getattr(self, '_recipient_lease', None)
+        result = self._prepare_clipboard_payload(contact, ClipboardHelper.set_image, str(payload),
+                                                 clipboard_matches=ClipboardHelper.image_matches)
+        result.update(action='prepare_image', success=False, prepared=False,
+                      identity_verified=False, automatic_retry=False)
+        try:
+            if ClipboardHelper.file_sha256(payload) != original_hash:
+                raise RuntimeError('Image source changed during preparation')
+            copied = self.copy_image_identity(contact, str(payload))
+            if (copied.get('success') and copied.get('identity_verified')
+                    and getattr(self, '_recipient_lease', None) is recipient
+                    and ClipboardHelper.file_sha256(payload) == original_hash):
+                result.update(success=True, prepared=True, identity_verified=True,
+                              verified_by='native_copied_image_pixels_and_current_preview')
+            else:
+                result.update(verification_stage=copied.get('failed_stage'),
+                              error_type=copied.get('error_type'))
+        except Exception as exc:
+            result['error_type'] = type(exc).__name__
         return result
+
+    def copy_image_identity(self, contact: str, path: str) -> dict:
+        """Observe one image through native Copy without removing or sending it."""
+        return self._image_draft_operation(contact, path, discard=False)
+
+    def cancel_verified_image(self, contact: str, path: str, *, confirm_discard: bool = False) -> dict:
+        """Discard one exact image draft only after native Copy proves its pixels."""
+        if not confirm_discard:
+            raise PermissionError('Explicit image draft discard required')
+        return self._image_draft_operation(contact, path, discard=True)
+
+    def _image_draft_operation(self, contact: str, path: str, *, discard: bool) -> dict:
+        from uuid import uuid4
+
+        import win32clipboard
+
+        from wechat_auto.primitives.attachment_observer import text_outside_card
+        from wechat_auto.primitives.vision import normalize_text
+
+        lease = getattr(self, '_recipient_lease', None)
+        if not lease or lease.get('username') != contact:
+            raise PermissionError('Current verified recipient required')
+        payload = Path(path).resolve(strict=True)
+        source_hash = ClipboardHelper.file_sha256(payload)
+        action = 'cancel_verified_image' if discard else 'copy_image_identity'
+        dispatched = False
+        copy_dispatched = False
+        identity_verified = False
+        stage = 'observe_image'
+
+        def checked(popup=None):
+            observation, _, frame = self._checked_recipient_composer(
+                lease, allowed_popup=popup, expected_image=payload)
+            candidate = observation['_image_preview']
+            if text_outside_card(observation['_composer_body_boxes'], candidate['box']):
+                raise RuntimeError('Other draft text present')
+            if ClipboardHelper.file_sha256(payload) != source_hash:
+                raise RuntimeError('Source image changed')
+            return observation, frame, candidate
+
+        def content_digest(candidate):
+            x, y, w, h = candidate['box']
+            return self._composer_fingerprint({'x': x+5, 'y': y+5, 'w': w-10, 'h': h-10})
+
+        def command(label, sequence, guard=None):
+            nonlocal dispatched, copy_dispatched, stage
+            stage = 'copy_menu' if label == '复制' else 'cut_menu'
+            _, frame, candidate = checked()
+            if guard and (frame != guard[0] or candidate['box'] != guard[1]
+                          or content_digest(candidate) != guard[2]):
+                raise StaleFrameError('Image changed before menu')
+            self.keyboard_only.right_click_window_fraction(*candidate['window_fraction'])
+            time.sleep(self._config.action_delay + .5)
+            origin_id = uuid4().hex
+            self._composer_menu_origin = {'recipient': lease, 'created_at': time.monotonic(),
+                                         'origin_id': origin_id, 'kind': 'image_preview'}
+            current, target, menu, observed = self._consume_composer_context_menu(
+                expected_origin_id=origin_id)
+            _, current_frame, current_candidate = checked(menu)
+            labels = {normalize_text(b['text']) for b in observed.get('boxes', [])}
+            image_menu = ({'剪切', '复制', '编辑'} <= labels
+                          and any(item.rstrip('.。…') == '另存为' for item in labels))
+            selection_menu = {'剪切', '复制', '粘贴', '删除'} <= labels
+            if current is not lease or not (image_menu or selection_menu):
+                raise RuntimeError('Exact image selection menu unavailable')
+            if current_frame != frame or current_candidate['box'] != candidate['box']:
+                raise StaleFrameError('Image geometry changed under menu')
+            if guard and content_digest(current_candidate) != guard[2]:
+                raise StaleFrameError('Image pixels changed under menu')
+            buttons = [b for b in observed['boxes'] if normalize_text(b['text']) == label
+                       and b.get('score', 0) >= .65]
+            size = observed.get('state', {}).get('size')
+            fresh = self._app.describe_window(menu['hwnd'])
+            if (len(buttons) != 1 or size != [menu['rect'][2]-menu['rect'][0],
+                                             menu['rect'][3]-menu['rect'][1]]
+                    or any(fresh[k] != menu[k] for k in (
+                        'hwnd', 'pid', 'class', 'owner_hwnd', 'rect', 'client_rect', 'dpi'))
+                    or win32clipboard.GetClipboardSequenceNumber() != sequence
+                    or ClipboardHelper.file_sha256(payload) != source_hash):
+                raise StaleFrameError('Image menu or clipboard/source changed')
+            child = BasicSkill(target, self._config, self._session)
+            child.keyboard_only.foreground_mode = 'never'
+            if label == '剪切':
+                dispatched = True
+            else:
+                copy_dispatched = True
+            child.keyboard_only.click_window_fraction(*self._box_center_fraction(buttons[0], tuple(size)))
+            time.sleep(self._config.action_delay + .5)
+
+        try:
+            checked()
+            ClipboardHelper.set_text('wechat-auto-image-copy-' + uuid4().hex)
+            sequence = win32clipboard.GetClipboardSequenceNumber()
+            command('复制', sequence)
+            stage = 'native_copy_pixels'
+            if (win32clipboard.GetClipboardSequenceNumber() == sequence
+                    or not ClipboardHelper.copied_image_matches(str(payload))):
+                raise RuntimeError('Copied image pixels do not match source')
+            identity_verified = True
+            sequence = win32clipboard.GetClipboardSequenceNumber()
+            _, frame, candidate = checked()
+            digest = content_digest(candidate)
+            if not digest:
+                raise RuntimeError('Image frame digest unavailable')
+            if not discard:
+                if win32clipboard.GetClipboardSequenceNumber() != sequence:
+                    raise RuntimeError('Image clipboard changed during final observation')
+                return self._receipt(action, success=True, identity_verified=True,
+                                     dispatched=True, copy_dispatched=True, sent=False, automatic_retry=False,
+                                     verified_by='native_copied_image_pixels_and_current_preview')
+            command('剪切', sequence, (frame, candidate['box'], digest))
+            stage = 'verify_empty_composer'
+            _, remaining, _ = self._checked_recipient_composer(lease)
+            verified = (not remaining and ClipboardHelper.file_sha256(payload) == source_hash
+                        and ClipboardHelper.copied_image_matches(str(payload)))
+            return self._receipt(action, success=verified, cancelled=verified,
+                                 dispatched=dispatched, identity_verified=True, sent=False,
+                                 automatic_retry=False, verified_by='copied_pixels_and_empty_composer_source_preserved'
+                                 if verified else 'result_unknown')
+        except Exception as exc:
+            return self._receipt(action, success=False, cancelled=False,
+                                 dispatched=dispatched if discard else copy_dispatched,
+                                 copy_dispatched=copy_dispatched, identity_verified=identity_verified, sent=False,
+                                 automatic_retry=False, failed_stage=stage, error_type=type(exc).__name__,
+                                 verified_by='result_unknown' if dispatched else 'image_discard_not_dispatched')
 
     def send_image(self, contact: str, path: str, *, confirm: bool = False) -> dict:
         if not confirm:
             raise PermissionError("Image send requires confirm=True")
-        result = self.prepare_image(contact, path)
-        self.keyboard_only._enter()
-        result.update(action="send_image", sent=True)
-        return result
+        raise PermissionError('Current image preview and result verification required; no send dispatched')
 
     def open_emoji(self) -> dict:
         return self.page_operation('open_emoji_panel')
@@ -1761,10 +2563,7 @@ class BasicSkill(BaseSkill):
         raise RuntimeError('Stored sticker cell coordinates were removed; identify the asset in the current panel')
 
     def open_moments(self) -> dict:
-        result = self.page_operation('open_discover')
-        if not result['success']:
-            raise RuntimeError('Discover navigation failed')
-        return self.page_operation('open_moments')
+        return {**self.navigate_page('moments_feed'), 'action': 'open_moments'}
 
     def like_moment(self, menu: tuple[float, float], like: tuple[float, float], *, confirm: bool = False) -> dict:
         if not confirm:

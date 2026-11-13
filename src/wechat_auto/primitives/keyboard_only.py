@@ -204,6 +204,10 @@ class KeyboardOnlyDriver:
         if not user32.ScreenToClient(hwnd, ctypes.byref(point)):
             raise RuntimeError("ScreenToClient failed")
         lparam = (point.x & 0xFFFF) | ((point.y & 0xFFFF) << 16)
+        # Deliver the native activation/cursor prelude before the button pair.
+        # Foreground focus alone did not activate the MMUI pointer path in live tests.
+        user32.SendMessageW(hwnd, WM_MOUSEACTIVATE, self.application.handle, 1 | (WM_LBUTTONDOWN << 16))
+        user32.SendMessageW(hwnd, WM_SETCURSOR, hwnd, 1 | (WM_MOUSEMOVE << 16))
         # Weixin 4.x's MMUI shell dispatches the actual hit-test from its
         # top-level WndProc.  Synchronous delivery is important: PostMessage
         # can leave the move/down/up sequence unassociated and silently lose
@@ -228,7 +232,12 @@ class KeyboardOnlyDriver:
 
     def _wm_key(self, vk: int, down: bool = True) -> None:
         hwnd = self._focused_input_hwnd()
-        lparam = 0x00000001 if down else 0xC0000001
+        scan = int(user32.MapVirtualKeyW(vk, 4) or 0)
+        lparam = 1 | ((scan & 0xff) << 16)
+        if scan & 0xff00 in {0xe000, 0xe100}:
+            lparam |= 1 << 24
+        if not down:
+            lparam |= 0xC0000000
         if not user32.PostMessageW(hwnd, WM_KEYDOWN if down else WM_KEYUP, vk, lparam):
             raise RuntimeError("PostMessageW(key) failed")
 
@@ -286,6 +295,15 @@ class KeyboardOnlyDriver:
         self._wm_key(VK_BACK, True)
         self._wm_key(VK_BACK, False)
 
+    def erase_backward(self, count: int) -> None:
+        """Deliver bounded native Backspace keys with real scan codes."""
+        if isinstance(count, bool) or not isinstance(count, int) or not 1 <= count <= 10000:
+            raise ValueError('Backspace count must be from 1 through 10000')
+        for _ in range(count):
+            self._wm_key(VK_BACK, True)
+            self._wm_key(VK_BACK, False)
+        self._settle_ui()
+
     def _paste(self) -> None:
         # A direct standard paste message is forwarded by Weixin's Qt shell
         # to its focused editor more reliably than a synthetic Ctrl+V chord.
@@ -320,6 +338,18 @@ class KeyboardOnlyDriver:
                 if not user32.PostMessageW(hwnd, WM_MOUSEWHEEL, wparam, lparam):
                     raise RuntimeError("PostMessageW(WM_MOUSEWHEEL) failed")
                 self._settle_ui()
+
+    def hover_window_fraction(self, fx: float, fy: float) -> None:
+        """Deliver only WM_MOUSEMOVE at a caller-observed current point."""
+        if not 0 <= fx <= 1 or not 0 <= fy <= 1:
+            raise ValueError('hover coordinates must be window fractions')
+        with self.foreground_lease():
+            hwnd = self.application.handle
+            sx, sy = self.point(fx, fy)
+            point = wt.POINT(sx, sy)
+            if not user32.ScreenToClient(hwnd, ctypes.byref(point)):
+                raise RuntimeError('ScreenToClient failed')
+            user32.SendMessageW(hwnd, WM_MOUSEMOVE, 0, (point.x & 0xffff) | ((point.y & 0xffff) << 16))
 
     def click_window_fraction(self, fx: float, fy: float) -> None:
         """Click a caller-observed self-drawn location through ``WM_LBUTTON*``.

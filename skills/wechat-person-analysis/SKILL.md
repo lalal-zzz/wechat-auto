@@ -29,7 +29,14 @@ description: 依据已审核的会话、资料和朋友圈证据，分析人物�
 7. 资料、动态和会话相互矛盾时分别注明来源，不以单一来源等级或旧 unknown 默认覆盖。日期按相关场景核实历法类型；恋爱纪念日只在适用关系中检查。
 8. 通过标准复核后，将短类型化 Claim 和证据链接存入 SQLite，并提交完整人物 Markdown 与正确父版本。只有提交成功才完成任务和向下游交接。
 
+复核 `analysis.get_person_input` 返回的 `user_corrections`。将本次已应用的修正 ID 通过 `analysis.submit` 的 `correction_ids` 提交，纳入版本输入指纹。
+
 ## 失败处理
+
+当前画像调用 `analysis.get_person_input` 时传入 `require_current_months=true`，
+核对已关联会话的本地月份，并要求每份汇总登记的上游版本与已核验月报一致。
+提交人物分析时以 `expected_upstream_conversation_versions` 原样传回读取结果的
+`upstream_conversation_versions`。提交前仍须核对资料、朋友圈和其他来源的实际覆盖。
 
 - 身份不明：停止聚合，建立或使用合并候选。
 - 证据稀疏：标为 unknown 或场景限定的观察。

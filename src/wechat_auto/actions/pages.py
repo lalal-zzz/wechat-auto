@@ -6,7 +6,7 @@ from dataclasses import asdict, dataclass
 
 from wechat_auto.primitives.page_catalog import PAGES
 
-PAGE_ACTION_VERSION = 4
+PAGE_ACTION_VERSION = 6
 
 
 @dataclass(frozen=True)
@@ -54,7 +54,7 @@ OPERATIONS = (
     PageOperation("cancel", ("contact_remark", "contact_permissions", "contact_tags",
                              "moments_comment", "group_name", "group_announcement", "group_invite"),
                   method="ocr_cancel", anchors=("取消",)),
-    PageOperation("dismiss", ("contact_more", "main_menu", "message_menu", "moments_menu"),
+    PageOperation("dismiss", ("contact_more", "main_menu", "message_menu", "moments_menu", "composer_menu", "composer_selection_menu"),
                   method="escape"),
     PageOperation("close", ("settings", "media_viewer", "file_preview", "moments_person", "contact_profile", "emoji_panel",
                             "moments_detail", "channels", "mini_program", "chat_history"),

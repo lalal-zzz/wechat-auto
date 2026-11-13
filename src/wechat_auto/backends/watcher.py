@@ -12,6 +12,8 @@ class WindowsDirectoryWatcher:
         self._handle = None
 
     def start(self) -> None:
+        if self._handle is not None:
+            return
         import win32con
         import win32file
         self._handle = win32file.FindFirstChangeNotification(
@@ -27,8 +29,10 @@ class WindowsDirectoryWatcher:
         import win32event
         import win32file
         result = win32event.WaitForSingleObject(self._handle, timeout_ms)
-        if result != win32con.WAIT_OBJECT_0:
+        if result == win32con.WAIT_TIMEOUT:
             return False
+        if result != win32con.WAIT_OBJECT_0:
+            raise OSError(f"Directory notification wait failed: {result}")
         win32file.FindNextChangeNotification(self._handle)
         return True
 

@@ -164,3 +164,34 @@ def test_restore_does_not_close_main_client_showing_channels(mock_app, config, s
     skill = skill_for_windows(mock_app, config, session, [[observed('channels')]])
     assert skill.restore_main_window()['success']
     skill.page_operation.assert_not_called()
+
+
+@pytest.mark.parametrize('pages,expected_calls', [
+    (['file_transfer', 'file_transfer'], 1),
+    (['contacts', 'file_transfer', 'file_transfer'], 2),
+    (['contacts', 'file_transfer', 'contacts'], 2),
+])
+def test_exact_chat_route_stops_repeated_edges_without_aliasing_filehelper(
+        mock_app, config, session, pages, expected_calls):
+    skill = skill_for_windows(mock_app, config, session, [[observed(page)] for page in pages])
+    result = skill.navigate_page('chat', max_steps=6)
+    assert not result['success']
+    assert result['stop_reason'] == 'route_no_progress'
+    assert skill.page_operation.call_count == expected_calls
+    assert len(result['steps']) == expected_calls
+
+
+def test_open_moments_accepts_already_observed_feed_without_another_click(mock_app, config, session):
+    skill = skill_for_windows(mock_app, config, session, [[observed('moments_feed')]])
+    result = skill.open_moments()
+    assert result['success'] and result['action'] == 'open_moments'
+    assert result['target']['page'] == 'moments_feed'
+    skill.page_operation.assert_not_called()
+
+
+def test_open_moments_preserves_route_failure(mock_app, config, session):
+    skill = skill_for_windows(mock_app, config, session, [[observed('chat')]])
+    skill.page_operation.return_value = {'success': False}
+    result = skill.open_moments()
+    assert not result['success']
+    assert result['stop_reason'] == 'navigation_postcondition_failed'

@@ -113,6 +113,63 @@ def test_a_compass_cross_match_cannot_substitute_for_the_absent_chat_icon():
         find_navigation_control(image, 'open_chats')
 
 
+@pytest.mark.parametrize('scale,light', [(1, False), (.75, True), (1.5, False)])
+@pytest.mark.parametrize('duplicate', [False, True, 'badged'])
+def test_unread_badge_is_unknown_pixels_and_duplicate_chats_still_stop(scale, light, duplicate):
+    from PIL import ImageDraw
+
+    background = 245 if light else 35
+    image = Image.new('RGB', (1000, 800), (210,)*3 if light else (65,)*3)
+    image.paste((background,)*3, (0, 0, 100, 800))
+    for operation, y in [('open_chats', 150), ('open_discover', 330)]:
+        glyph = Image.fromarray(np.array([[255 if v == '1' else 0 for v in row]
+                                         for row in TEMPLATES[operation]], dtype=np.uint8))
+        image.paste((70,)*3 if light else (160,)*3, (35, y), glyph)
+        if operation == 'open_chats':
+            if duplicate:
+                image.paste((70,)*3 if light else (160,)*3, (35, 500), glyph)
+            draw = ImageDraw.Draw(image)
+            draw.ellipse((61, 148, 80, 167), fill=(250, 70, 75))
+            draw.text((67, 150), '1', fill='white')
+            if duplicate == 'badged':
+                draw.ellipse((61, 498, 80, 517), fill=(250, 70, 75))
+                draw.text((67, 500), '2', fill='white')
+    image = image.resize((round(1000*scale), round(800*scale)), Image.Resampling.NEAREST)
+    if duplicate:
+        with pytest.raises(NavigationControlError, match='ambiguous'):
+            find_navigation_control(image, 'open_chats')
+    else:
+        control = find_navigation_control(image, 'open_chats')
+        assert control['x'] == pytest.approx(53*scale, abs=2)
+        assert control['y'] == pytest.approx(168*scale, abs=2)
+
+
+def test_badge_on_compass_does_not_create_chat_evidence():
+    from PIL import ImageDraw
+
+    image = Image.new('RGB', (1000, 800), (65,)*3)
+    image.paste((35,)*3, (0, 0, 100, 800))
+    glyph = Image.fromarray(np.array([[255 if v == '1' else 0 for v in row]
+                                     for row in TEMPLATES['open_discover']], dtype=np.uint8))
+    image.paste((160,)*3, (35, 150), glyph)
+    ImageDraw.Draw(image).ellipse((61, 148, 80, 167), fill=(250, 70, 75))
+    with pytest.raises(NavigationControlError, match='absent or ambiguous'):
+        find_navigation_control(image, 'open_chats')
+
+
+def test_large_badge_cannot_replace_missing_chat_shape():
+    from PIL import ImageDraw
+
+    image = Image.new('RGB', (1000, 800), (65,)*3)
+    image.paste((35,)*3, (0, 0, 100, 800))
+    glyph = Image.fromarray(np.array([[255 if v == '1' else 0 for v in row]
+                                     for row in TEMPLATES['open_chats']], dtype=np.uint8))
+    image.paste((160,)*3, (35, 150), glyph)
+    ImageDraw.Draw(image).ellipse((40, 148, 76, 182), fill=(250, 70, 75))
+    with pytest.raises(NavigationControlError, match='absent or ambiguous'):
+        find_navigation_control(image, 'open_chats')
+
+
 def test_selected_contacts_glyph_observes_page_without_tree_headers():
     image, _ = sidebar((1410, 904))
     rgb = np.array(image)

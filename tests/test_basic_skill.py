@@ -1,4 +1,4 @@
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -162,7 +162,7 @@ def test_contact_mutation_requires_confirmation_bound_to_username(
     mock_app, mock_finder, config, session
 ):
     skill = _skill(mock_app, mock_finder, config, session)
-    skill.open_contact_profile = MagicMock(return_value={"verified_by": "ocr"})
+    skill.open_contact_profile = MagicMock(return_value={"verified_by": "ocr", "opened": True})
     with pytest.raises(PermissionError, match="wxid_test_friend"):
         skill.execute_contact_action(
             username="wxid_test_friend", contact_action="delete_contact", ui_query="朋友",
@@ -179,46 +179,97 @@ def test_old_semantic_mutation_coordinates_are_unavailable(mock_app, mock_finder
 
 def test_prepare_text_uses_hwnd_driver(mock_app, mock_finder, config, session):
     skill = _skill(mock_app, mock_finder, config, session)
-    skill.open_chat = MagicMock(return_value={"verified_by": "ocr", "opened": True})
-    result = skill.prepare_text("target", "hello")
+    skill._recipient_lease = {'username': 'target'}
+    frame = {'x': 20, 'y': 50, 'w': 60, 'h': 40}
+    skill._checked_recipient_composer = MagicMock(side_effect=[
+        ({'state': {'size': [100, 100]}}, '', frame), ({}, 'hello', frame)])
+    with patch('wechat_auto.actions.basic.time.sleep'):
+        result = skill.prepare_text("target", "hello")
     assert result["sent"] is False
-    skill._focus_input.assert_called_once()
+    assert result['prepared'] is True
+    skill._focus_input.assert_not_called()
+    skill.keyboard_only.click_window_fraction.assert_called_once_with(.5, .62)
     skill.keyboard_only._type_text.assert_called_once_with("hello")
 
 
 def test_unselected_search_never_receives_reply_text(mock_app, mock_finder, config, session):
     skill = _skill(mock_app, mock_finder, config, session)
     skill.open_chat = MagicMock(return_value={'opened': False, 'selection_required': True})
-    from wechat_auto.exceptions import ChatNotFoundError
-    with pytest.raises(ChatNotFoundError, match='chat_not_opened'):
+    with pytest.raises(PermissionError, match='Stable contact'):
         skill.prepare_text('target', 'reply')
     skill._focus_input.assert_not_called()
     skill.keyboard_only._type_text.assert_not_called()
 
 
-def test_prepare_mention_is_hwnd_only_and_requires_selection(
+def test_prepare_mention_uses_verified_empty_draft_path_without_accepting_suggestion(
     mock_app, mock_finder, config, session
 ):
     skill = _skill(mock_app, mock_finder, config, session)
-    skill.open_chat = MagicMock(return_value={"verified_by": "ocr"})
-    result = skill.prepare_mention("群聊", "张三", "你好")
-    assert result["selection_required"] is True
-    assert result["sent"] is False
-    assert [call.args[0] for call in skill.keyboard_only._type_text.call_args_list] == [
-        "@张三", " 你好"
-    ]
+    skill._recipient_lease = {'username': 'stable@chatroom'}
+    skill.prepare_text = MagicMock(return_value={'prepared': False, 'success': False})
+    result = skill.prepare_mention('stable@chatroom', '张三', '你好')
+    skill.prepare_text.assert_called_once_with('stable@chatroom', '@张三 你好')
+    assert not result['mention_verified'] and not result['sent']
+    assert result['selection_required'] and not result['prepared']
+    skill.keyboard_only._enter.assert_not_called()
 
 
-def test_quote_send_requires_confirmation_and_uses_hwnd(
-    mock_app, mock_finder, config, session
+@pytest.mark.parametrize('action,args', [
+    ('send_mention', ('group@chatroom', '张三', '你好')),
+    ('send_quote', ('contact', (.5, .6), (.6, .5), '回复')),
+    ('prepare_quote', ('contact', (.5, .6))),
+])
+def test_unverified_mention_and_quote_never_navigate_type_or_submit(
+    mock_app, mock_finder, config, session, action, args
 ):
     skill = _skill(mock_app, mock_finder, config, session)
-    skill.open_chat = MagicMock(return_value={"verified_by": "ocr"})
+    skill.open_chat = MagicMock(return_value={'opened': True})
+    skill.prepare_text = MagicMock()
+    skill.prepare_quote = MagicMock() if action == 'send_quote' else skill.prepare_quote
+    skill.click = MagicMock()
+    skill.right_click = MagicMock()
+    kwargs = {'confirm': True} if action.startswith('send_') else {}
     with pytest.raises(PermissionError):
-        skill.send_quote("好友", (.5, .6), (.6, .5), "回复")
-    result = skill.send_quote("好友", (.5, .6), (.6, .5), "回复", confirm=True)
-    assert result["sent"] is True
-    skill.keyboard_only._enter.assert_called_once()
+        getattr(skill, action)(*args, **kwargs)
+    skill.open_chat.assert_not_called()
+    skill.prepare_text.assert_not_called()
+    skill.click.assert_not_called()
+    skill.right_click.assert_not_called()
+    skill._focus_input.assert_not_called()
+    skill.keyboard_only._type_text.assert_not_called()
+    skill.keyboard_only._enter.assert_not_called()
+
+
+@pytest.mark.parametrize('lease,contact', [
+    (None, 'stable@chatroom'),
+    ({'username': 'other@chatroom'}, 'stable@chatroom'),
+    ({'username': 'ordinary'}, 'ordinary'),
+    ({'username': 'filehelper'}, 'filehelper'),
+])
+def test_mention_draft_rejects_missing_or_wrong_group_identity(mock_app, mock_finder, config, session, lease, contact):
+    skill = _skill(mock_app, mock_finder, config, session)
+    skill._recipient_lease = lease
+    skill.open_chat = MagicMock(return_value={'opened': True})
+    skill.prepare_text = MagicMock()
+    with pytest.raises(PermissionError, match='group recipient'):
+        skill.prepare_mention(contact, 'member')
+    skill.open_chat.assert_not_called()
+    skill.prepare_text.assert_not_called()
+    skill.keyboard_only._type_text.assert_not_called()
+
+
+@pytest.mark.parametrize('action,args,error', [
+    ('send_mention', ('group@chatroom', 'member'), PermissionError),
+    ('send_quote', ('contact', (.5, .6), None, 'reply'), PermissionError),
+    ('prepare_mention', ('group@chatroom', '  '), ValueError),
+])
+def test_mention_and_quote_validation_has_no_ui_effects(mock_app, mock_finder, config, session, action, args, error):
+    skill = _skill(mock_app, mock_finder, config, session)
+    with pytest.raises(error):
+        getattr(skill, action)(*args)
+    skill._focus_input.assert_not_called()
+    skill.keyboard_only._type_text.assert_not_called()
+    skill.keyboard_only._enter.assert_not_called()
 
 
 def test_copy_message_uses_ocr_menu_coordinate_without_reading_clipboard(
@@ -236,17 +287,15 @@ def test_copy_message_uses_ocr_menu_coordinate_without_reading_clipboard(
     skill.click.assert_called_once_with(.12, .2625)
 
 
-def test_quote_can_locate_context_menu_item_with_ocr(mock_app, mock_finder, config, session):
+def test_quote_ocr_label_does_not_authenticate_message_coordinates(mock_app, mock_finder, config, session):
     config.ocr_verify_enabled = True
     skill = _skill(mock_app, mock_finder, config, session)
-    skill.open_chat = MagicMock(return_value={"verified_by": "ocr"})
-    skill.right_click = MagicMock()
-    skill.click = MagicMock()
-    skill.vision.ocr.return_value = [{"text": "引用", "x": 400, "y": 300, "w": 40, "h": 20}]
-    skill.vision.size.return_value = (1000, 800)
-    result = skill.prepare_quote("好友", (.5, .6), text="草稿")
-    assert result["quote_menu"] == [.42, .3875]
-    skill.click.assert_called_once_with(.42, .3875)
+    skill.open_chat = MagicMock(return_value={'opened': True})
+    skill.vision.ocr.return_value = [{'text': '引用', 'x': 400, 'y': 300, 'w': 40, 'h': 20}]
+    with pytest.raises(PermissionError, match='message identity'):
+        skill.prepare_quote('contact', (.5, .6), text='draft')
+    skill.open_chat.assert_not_called()
+    skill.vision.ocr.assert_not_called()
 
 
 def test_open_contact_profile_uses_only_verified_contacts_result(
@@ -304,16 +353,104 @@ def test_open_contact_profile_rejects_missing_contact_section(
 
 def test_prepare_file_pastes_through_hwnd(mock_app, mock_finder, config, session, tmp_path):
     skill = _skill(mock_app, mock_finder, config, session)
-    skill.open_chat = MagicMock(return_value={"verified_by": "ocr"})
+    skill.open_chat = MagicMock(return_value={"verified_by": "ocr", "opened": True})
+    skill._recipient_lease = {'username': 'target'}
+    skill._paste_attachment_via_menu = MagicMock()
+    skill.copy_attachment_identity = MagicMock(return_value={'identity_verified': False})
+    skill._checked_recipient_composer = MagicMock(return_value=(
+        {'state': {'size': [1000, 800]}}, '', {'x': 300, 'y': 600, 'w': 680, 'h': 180}))
     payload = tmp_path / "payload.bin"
     payload.write_bytes(b"test")
     from unittest.mock import patch
-    with patch("wechat_auto.actions.basic.ClipboardHelper.set_files") as set_files:
+    with (patch("wechat_auto.actions.basic.ClipboardHelper.set_files") as set_files,
+          patch("wechat_auto.actions.basic.ClipboardHelper.files_match", return_value=True)):
         result = skill.prepare_file("target", str(payload))
     assert result["sent"] is False
     set_files.assert_called_once_with([str(payload.resolve())])
-    skill._focus_input.assert_called_once()
-    skill.keyboard_only._paste.assert_called_once()
+    assert result['prepared'] is False
+    skill._focus_input.assert_not_called()
+    skill._paste_attachment_via_menu.assert_called_once()
+    skill.keyboard_only._paste.assert_not_called()
+
+
+@pytest.mark.parametrize('action', [
+    'prepare_file', 'prepare_image', 'send_file', 'send_image',
+    'prepare_mention', 'send_mention', 'prepare_quote', 'send_quote',
+    'copy_message', 'prepare_profile_observation',
+])
+def test_unopened_search_stops_all_dependent_chat_actions(
+    mock_app, mock_finder, config, session, tmp_path, action
+):
+    from unittest.mock import patch
+
+    from wechat_auto.exceptions import ChatNotFoundError
+
+    skill = _skill(mock_app, mock_finder, config, session)
+    skill.open_chat = MagicMock(return_value={'opened': False, 'selection_required': True})
+    skill.click = MagicMock()
+    skill.right_click = MagicMock()
+    payload = tmp_path / 'payload.bin'
+    payload.write_bytes(b'synthetic')
+    arguments = {
+        'prepare_file': (('target', str(payload)), {}),
+        'prepare_image': (('target', str(payload)), {}),
+        'send_file': (('target', str(payload)), {'confirm': True}),
+        'send_image': (('target', str(payload)), {'confirm': True}),
+        'prepare_mention': (('target', 'member', 'draft'), {}),
+        'send_mention': (('target', 'member', 'draft'), {'confirm': True}),
+        'prepare_quote': (('target', (.5, .6), (.6, .5), 'draft'), {}),
+        'send_quote': (('target', (.5, .6), (.6, .5), 'draft'), {'confirm': True}),
+        'copy_message': (((.5, .6),), {'contact': 'target'}),
+        'prepare_profile_observation': (('target', (.5, .6)), {}),
+    }
+    args, kwargs = arguments[action]
+    with (
+        patch('wechat_auto.actions.basic.ClipboardHelper.set_files') as files,
+        patch('wechat_auto.actions.basic.ClipboardHelper.set_image') as image,
+        pytest.raises((ChatNotFoundError, PermissionError)),
+    ):
+        getattr(skill, action)(*args, **kwargs)
+    files.assert_not_called()
+    image.assert_not_called()
+    skill._focus_input.assert_not_called()
+    skill.keyboard_only._type_text.assert_not_called()
+    skill.keyboard_only._paste.assert_not_called()
+    skill.keyboard_only._enter.assert_not_called()
+    skill.click.assert_not_called()
+    skill.right_click.assert_not_called()
+
+
+@pytest.mark.parametrize('action', ['send_file', 'send_image', 'send_mention'])
+def test_unverified_external_submission_never_claims_sent(
+    mock_app, mock_finder, config, session, tmp_path, action
+):
+    from unittest.mock import patch
+
+    skill = _skill(mock_app, mock_finder, config, session)
+    skill.open_chat = MagicMock(return_value={'opened': True})
+    if action != 'send_mention':
+        skill._recipient_lease = {'username': 'target'}
+        skill._paste_attachment_via_menu = MagicMock()
+        skill._checked_recipient_composer = MagicMock(return_value=(
+            {'state': {'size': [1000, 800]}}, '', {'x': 300, 'y': 600, 'w': 680, 'h': 180}))
+    payload = tmp_path / 'payload.bin'
+    payload.write_bytes(b'synthetic')
+    args = ('target', 'member', 'draft') if action == 'send_mention' else ('target', str(payload))
+    with (
+        patch('wechat_auto.actions.basic.ClipboardHelper.set_files'),
+        patch('wechat_auto.actions.basic.ClipboardHelper.set_image'),
+        patch('wechat_auto.actions.basic.ClipboardHelper.files_match', return_value=True),
+        patch('wechat_auto.actions.basic.ClipboardHelper.image_matches', return_value=True),
+    ):
+        if action != 'send_mention':
+            with pytest.raises(PermissionError, match='verification required'):
+                getattr(skill, action)(*args, confirm=True)
+            skill.keyboard_only._enter.assert_not_called()
+            return
+        with pytest.raises(PermissionError, match='group/member'):
+            getattr(skill, action)(*args, confirm=True)
+    skill.keyboard_only._enter.assert_not_called()
+    skill.keyboard_only._type_text.assert_not_called()
 
 
 def test_sticker_id_cannot_use_stored_cell_coordinates(mock_app, mock_finder, config, session):

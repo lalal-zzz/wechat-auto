@@ -6,6 +6,59 @@ class NavigationControlError(RuntimeError):
     """A current-frame navigation control could not be uniquely located."""
 
 
+def composer_send_enabled(image, send_box: dict) -> bool | None:
+    """Observe the current green Send backing; missing pixels are unknown."""
+    import numpy as np
+    from PIL import Image
+
+    if not isinstance(image, Image.Image):
+        return None
+    try:
+        x, y, w, h = (int(send_box[k]) for k in ('x', 'y', 'w', 'h'))
+    except (KeyError, TypeError, ValueError):
+        return None
+    if x < 0 or y < 0 or w <= 0 or h <= 0 or x+w > image.width or y+h > image.height:
+        return None
+    pixels = np.asarray(image.crop((x, y, x+w, y+h)).convert('RGB')).astype(float)
+    green = ((pixels[:, :, 1] > 100) & (pixels[:, :, 1] > pixels[:, :, 0]*1.25)
+             & (pixels[:, :, 1] > pixels[:, :, 2]*1.15))
+    return bool(green.mean() > .05)
+
+
+def is_empty_composer_placeholder(image, body_boxes: list[dict], send_box: dict) -> bool:
+    """Recognize one known low-contrast guide, never arbitrary composer text."""
+    import numpy as np
+    from PIL import Image
+
+    from wechat_auto.primitives.vision import normalize_text
+
+    if (not isinstance(image, Image.Image) or not body_boxes
+            or normalize_text(''.join(b['text'] for b in body_boxes)) != '按住鼠标语音输入文字'):
+        return False
+
+    def patch(box):
+        x, y, w, h = (int(box[k]) for k in ('x', 'y', 'w', 'h'))
+        if x < 0 or y < 0 or w <= 0 or h <= 0 or x+w > image.width or y+h > image.height:
+            return None
+        return np.asarray(image.crop((x, y, x+w, y+h)).convert('RGB')).astype(float)
+
+    for box in [*body_boxes, send_box]:
+        pixels = patch(box)
+        if pixels is None:
+            return False
+        # An enabled Send button has a green backing, including its text box.
+        green = ((pixels[:, :, 1] > 100) & (pixels[:, :, 1] > pixels[:, :, 0]*1.25)
+                 & (pixels[:, :, 1] > pixels[:, :, 2]*1.15))
+        if green.mean() > .05:
+            return False
+        background = np.median(pixels.reshape(-1, 3), axis=0)
+        contrast = np.max(np.abs(pixels-background), axis=2)
+        ink = contrast[contrast > 25]
+        if not ink.size or np.percentile(ink, 95) > 140:
+            return False
+    return True
+
+
 def find_private_chat_profile_avatar(image, boxes: list, state: dict, query: str) -> dict:
     """Find the unique member avatar above its exact name in chat details."""
     import cv2
@@ -73,6 +126,11 @@ def find_navigation_control(image, operation: str) -> dict:
     mask = np.uint8(np.abs(gray - np.median(gray)) > 32)
     red = (rgb[:, :, 0].astype(float) > rgb[:, :, 1] * 1.4) & (rgb[:, :, 0].astype(float) > rgb[:, :, 2] * 1.4)
     mask[red] = 0
+    # Remove the entire badge, including its white numeral. Treat occluded
+    # pixels as unknown rather than background or evidence of a glyph.
+    badge = np.zeros_like(mask)
+    contours, _ = cv2.findContours(np.uint8(red), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    cv2.drawContours(badge, contours, -1, 1, cv2.FILLED)
     template = np.array([[int(v) for v in row] for row in TEMPLATES[operation]], dtype=np.uint8)
     # Selection may fill an icon which is outlined when inactive. Compare
     # silhouettes so color/fill state does not change the semantic target.
@@ -81,14 +139,42 @@ def find_navigation_control(image, operation: str) -> dict:
         result = np.zeros_like(binary)
         cv2.drawContours(result, contours, -1, 1, cv2.FILLED)
         return result
+    occluded_mask = silhouette(mask | badge)
     mask, template = silhouette(mask), silhouette(template)
+    has_badge = bool(badge.any())
+    known = (1 - badge).astype(np.float32)
+    visible = (occluded_mask * known).astype(np.float32)
+
+    def match_scores(glyph):
+        scores = cv2.matchTemplate(mask, glyph, cv2.TM_CCOEFF_NORMED)
+        if has_badge:
+            th, tw = glyph.shape
+            ones = np.ones((th, tw), np.float32)
+            pattern = glyph.astype(np.float32)
+            count = cv2.matchTemplate(known, ones, cv2.TM_CCORR)
+            ink = cv2.matchTemplate(visible, ones, cv2.TM_CCORR)
+            expected = cv2.matchTemplate(known, pattern, cv2.TM_CCORR)
+            common = cv2.matchTemplate(visible, pattern, cv2.TM_CCORR)
+            safe_count = np.maximum(count, 1)
+            variance = (ink - ink * ink / safe_count) * (
+                expected - expected * expected / safe_count)
+            weighted = np.full_like(scores, -1)
+            # At least 75% of the frame and glyph ink must remain visible.
+            # An unoccluded rival retains its ordinary score for ambiguity checks.
+            eligible = ((count >= tw * th * .75) & (count < tw * th - .5)
+                        & (expected >= pattern.sum() * .75) & (variance > 1e-6))
+            weighted[eligible] = ((common - ink * expected / safe_count)[eligible]
+                                  / np.sqrt(variance[eligible]))
+            scores = np.maximum(scores, weighted)
+        return scores
+
     candidates = []
     for scale in np.linspace(.65, 1.6, 39):
         tw, th = round(template.shape[1] * scale), round(template.shape[0] * scale)
         if tw >= right or th >= height:
             continue
         glyph = cv2.resize(template, (tw, th), interpolation=cv2.INTER_NEAREST_EXACT)
-        scores = cv2.matchTemplate(mask, glyph, cv2.TM_CCOEFF_NORMED)
+        scores = match_scores(glyph)
         ys, xs = np.where(scores >= .80)
         for x, y in zip(xs, ys, strict=True):
             candidates.append({'x': float(x + tw / 2), 'y': float(y + th / 2),
@@ -106,6 +192,25 @@ def find_navigation_control(image, operation: str) -> dict:
             or len(unique) > 1 and unique[0]['score'] - unique[1]['score'] < .04):
         raise NavigationControlError('Current navigation glyph absent or ambiguous')
     c = unique[0]
+    x, y = round(c['x'] - c['w']/2), round(c['y'] - c['h']/2)
+    if badge[y:y+c['h'], x:x+c['w']].any():
+        # Partial circles can match a bubble. Require the same visible pixels
+        # to prefer this semantic glyph over every other supported sidebar icon.
+        for name, rows in TEMPLATES.items():
+            if name == operation:
+                continue
+            rival = silhouette(np.array([[int(v) for v in row] for row in rows], dtype=np.uint8))
+            for scale in np.linspace(.65, 1.6, 39):
+                rw, rh = round(rival.shape[1]*scale), round(rival.shape[0]*scale)
+                if rw >= right or rh >= height:
+                    continue
+                scores = match_scores(cv2.resize(rival, (rw, rh), interpolation=cv2.INTER_NEAREST_EXACT))
+                # Compare spatially overlapping candidates, never a different
+                # icon elsewhere in the sidebar.
+                x0, x1 = max(0, round(c['x']-rw/2-3)), min(scores.shape[1], round(c['x']-rw/2+4))
+                y0, y1 = max(0, round(c['y']-rh/2-3)), min(scores.shape[0], round(c['y']-rh/2+4))
+                if x1 > x0 and y1 > y0 and scores[y0:y1, x0:x1].max() >= c['score'] - .02:
+                    raise NavigationControlError('Current navigation glyph absent or ambiguous')
     return {**c, 'window_fraction': [c['x'] / width, c['y'] / height],
             'method': 'opencv_multiscale_glyph', 'frame_size': [width, height]}
 

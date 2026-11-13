@@ -1,5 +1,5 @@
 import numpy as np
-from PIL import Image,ImageDraw
+from PIL import Image, ImageDraw
 
 from wechat_auto.primitives.composer_templates import EMOJI_FAVORITES_TAB
 from wechat_auto.primitives.page_controls import observe_emoji_panel

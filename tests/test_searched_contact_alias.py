@@ -46,7 +46,7 @@ def test_wrong_alias_never_closes_or_renews_sender_lease(mock_app,config,session
 
 
 def test_foreign_profile_window_is_rejected_before_observation(mock_app,config,session):
-    skill,pending,auxiliary,observer=fixture(mock_app,config,session)
+    skill,pending,auxiliary,_observer=fixture(mock_app,config,session)
     auxiliary[0]['pid']=99
     with pytest.raises(RuntimeError,match='same-process'):
         skill._finish_searched_contact_alias('alias_test',pending,auxiliary)

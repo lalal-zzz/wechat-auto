@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Self
 from uuid import uuid4
 
+from wechat_auto.memory.connection import MemoryConnection
 from wechat_auto.version import MEMORY_SCHEMA_VERSION
 
 CLAIM_STATUSES = {"confirmed", "observed", "inferred", "unknown", "inactive", "superseded"}
@@ -25,6 +26,19 @@ JOB_STATUSES = {"pending", "running", "complete", "failed", "superseded"}
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def _require_unexpired(value):
+    if value is None or value == '':
+        return
+    try:
+        expiry = datetime.fromisoformat(value)
+    except (ValueError, TypeError):
+        raise PermissionError('confirmation expiry is invalid; review required') from None
+    if expiry.utcoffset() is None:
+        raise PermissionError('confirmation expiry needs an explicit timezone')
+    if expiry <= datetime.now(timezone.utc):
+        raise PermissionError('confirmation has expired')
 
 
 def _short_id(prefix: str) -> str:
@@ -42,11 +56,27 @@ class MemoryStore:
         # MCP executes synchronous tool functions in worker threads.  The store
         # owns one process-local connection, so allow those serialized SDK calls
         # to use it outside the thread that built the server.
-        self._connection = sqlite3.connect(self.path, check_same_thread=False)
+        self._connection = sqlite3.connect(self.path, check_same_thread=False, factory=MemoryConnection)
         self._connection.row_factory = sqlite3.Row
-        self._connection.execute("PRAGMA foreign_keys=ON")
-        self._connection.execute("PRAGMA journal_mode=WAL")
-        self._create_schema()
+        try:
+            # Reject unknown schemas before journal changes or CREATE TABLE.
+            if self._connection.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='schema_meta'"
+            ).fetchone():
+                existing = self._connection.execute(
+                    "SELECT value FROM schema_meta WHERE key='schema_version'"
+                ).fetchone()
+                if existing is not None and int(existing[0]) not in {1, 2, self.schema_version}:
+                    raise RuntimeError(
+                        f"Unsupported Memory schema {existing[0]}; expected {self.schema_version}. "
+                        "Run a compatible migration or rebuild before opening this database."
+                    )
+            self._connection.execute("PRAGMA foreign_keys=ON")
+            self._connection.execute("PRAGMA journal_mode=WAL")
+            self._create_schema()
+        except BaseException:
+            self._connection.close()
+            raise
 
     def close(self) -> None:
         self._connection.close()
@@ -61,6 +91,10 @@ class MemoryStore:
     def transaction(self) -> Iterator[sqlite3.Connection]:
         with self._connection:
             yield self._connection
+
+    def atomic(self):
+        """Group store methods into one commit; local commits defer until exit."""
+        return self._connection.atomic()
 
     def _create_schema(self) -> None:
         self._connection.executescript("""
@@ -237,6 +271,20 @@ class MemoryStore:
             fingerprint TEXT NOT NULL, created_at TEXT NOT NULL,
             PRIMARY KEY(scope_type,scope_id,period,fingerprint)
         );
+        CREATE TABLE IF NOT EXISTS analysis_archive_snapshots(
+            scope_type TEXT NOT NULL, scope_id TEXT NOT NULL, period TEXT NOT NULL,
+            version INTEGER NOT NULL, message_snapshot TEXT NOT NULL,
+            PRIMARY KEY(scope_type,scope_id,period,version),
+            FOREIGN KEY(scope_type,scope_id,period,version)
+                REFERENCES analysis_versions(scope_type,scope_id,period,version)
+        );
+        CREATE TABLE IF NOT EXISTS analysis_upstream_month_versions(
+            scope_type TEXT NOT NULL, scope_id TEXT NOT NULL, period TEXT NOT NULL,
+            version INTEGER NOT NULL, versions_json TEXT NOT NULL,
+            PRIMARY KEY(scope_type,scope_id,period,version),
+            FOREIGN KEY(scope_type,scope_id,period,version)
+                REFERENCES analysis_versions(scope_type,scope_id,period,version)
+        );
         CREATE TABLE IF NOT EXISTS dependency_edges(
             upstream_type TEXT NOT NULL, upstream_id TEXT NOT NULL,
             downstream_type TEXT NOT NULL, downstream_id TEXT NOT NULL,
@@ -270,6 +318,10 @@ class MemoryStore:
             context_fingerprint TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending',
             created_at TEXT NOT NULL, expires_at TEXT, confirmed_at TEXT,
             confirmation_id TEXT UNIQUE, sent_at TEXT
+        );
+        CREATE TABLE IF NOT EXISTS reply_draft_memory_versions(
+            draft_id TEXT PRIMARY KEY REFERENCES reply_drafts(draft_id) ON DELETE CASCADE,
+            fingerprint TEXT NOT NULL
         );
         CREATE TABLE IF NOT EXISTS pending_actions(
             action_id TEXT PRIMARY KEY, action_type TEXT NOT NULL, target_id TEXT NOT NULL,
@@ -334,6 +386,11 @@ class MemoryStore:
                       person_type: str = "contact", display_name: str = "",
                       source: str = "wechat_db", seen_at: str | None = None,
                       mark_active: bool = True) -> str:
+        ranks = {'group_member': 1, 'contact': 2, 'self': 3}
+        if person_type not in ranks:
+            raise ValueError('person_type must be self, contact or group_member')
+        incoming_rank = ranks[person_type]
+        rank_sql = "CASE person_type WHEN 'self' THEN 3 WHEN 'contact' THEN 2 WHEN 'group_member' THEN 1 ELSE 0 END"
         if not identity_value.strip():
             raise ValueError("identity_value must not be empty")
         row = self._connection.execute(
@@ -344,16 +401,25 @@ class MemoryStore:
         observed = seen_at or now
         if row:
             person_id = str(row[0])
+            existing_kind = self._connection.execute('SELECT person_type FROM people WHERE person_id=?',
+                                                     (person_id,)).fetchone()
+            if existing_kind is None or existing_kind[0] not in ranks:
+                raise ValueError('Existing person classification requires review')
             with self._connection:
                 self._connection.execute(
-                    "UPDATE people SET display_name=CASE WHEN ?='' THEN display_name ELSE ? END, "
-                    "last_seen_at=?, status=CASE WHEN ? THEN 'active' ELSE status END, "
+                    f"UPDATE people SET display_name=CASE WHEN ?='' OR ({rank_sql}>? AND display_name!='') "
+                    "THEN display_name ELSE ? END, "
+                    f"person_type=CASE WHEN {rank_sql}<? THEN ? ELSE person_type END, "
+                    "first_seen_at=wa_observed_first(first_seen_at,?), "
+                    "last_seen_at=wa_observed_last(last_seen_at,?), status=CASE WHEN ? THEN 'active' ELSE status END, "
                     "updated_at=? WHERE person_id=?",
-                    (display_name, display_name, observed, int(mark_active), now, person_id),
+                    (display_name, incoming_rank, display_name, incoming_rank, person_type,
+                     observed, observed, int(mark_active), now, person_id),
                 )
                 self._connection.execute(
-                    "UPDATE person_identities SET last_seen_at=? WHERE identity_type=? AND identity_value=?",
-                    (observed, identity_type, identity_value.strip()),
+                    "UPDATE person_identities SET first_seen_at=wa_observed_first(first_seen_at,?), "
+                    "last_seen_at=wa_observed_last(last_seen_at,?) WHERE identity_type=? AND identity_value=?",
+                    (observed, observed, identity_type, identity_value.strip()),
                 )
             return person_id
         person_id = _short_id("p")
@@ -459,9 +525,10 @@ class MemoryStore:
             conversation_id = str(row[0])
             self._connection.execute(
                 "UPDATE conversations SET title=CASE WHEN ?='' THEN title ELSE ? END, "
-                "status=CASE WHEN ? THEN 'active' ELSE status END,last_seen_at=?,updated_at=? "
+                "status=CASE WHEN ? THEN 'active' ELSE status END, "
+                "first_seen_at=wa_observed_first(first_seen_at,?),last_seen_at=wa_observed_last(last_seen_at,?),updated_at=? "
                 "WHERE conversation_id=?",
-                (title, title, int(mark_active), observed, now, conversation_id),
+                (title, title, int(mark_active), observed, observed, now, conversation_id),
             )
         else:
             conversation_id = _short_id("cv")
@@ -824,12 +891,25 @@ class MemoryStore:
         self._connection.commit()
 
     def mark_dirty(self, node_type: str, node_id: str, reason: str,
-                   source_id: str = "") -> None:
-        self._connection.execute(
+                   source_id: str = "") -> bool:
+        inserted = self._connection.execute(
             "INSERT OR IGNORE INTO dirty_nodes VALUES(?,?,?,?,?)",
             (node_type, node_id, reason, _now(), source_id),
-        )
+        ).rowcount == 1
         self._connection.commit()
+        return inserted
+
+    def queue_month_message_delta(self, conversation_id: str, period: str,
+                                  message_ids: Iterable[str]) -> None:
+        """Record unseen archive/monitor messages and enqueue their month once per batch."""
+        node_id = f"{conversation_id}:{period}"
+        unseen = [item_id for item_id in sorted(set(message_ids))
+                  if self.mark_dirty("conversation_month", node_id, "message_delta", item_id)]
+        if unseen:
+            self.add_dependency("conversation_month", node_id, "conversation", conversation_id, "rolls_up_to")
+            fingerprint = hashlib.sha256(json.dumps(unseen).encode("utf-8")).hexdigest()
+            self.enqueue_job("monthly_analysis", "conversation", conversation_id,
+                             period=period, priority=50, input_fingerprint=f"message-batch:{fingerprint}")
 
     def add_dependency(self, upstream_type: str, upstream_id: str,
                        downstream_type: str, downstream_id: str,
@@ -877,28 +957,23 @@ class MemoryStore:
 
     def enqueue_job(self, job_type: str, scope_type: str, scope_id: str, *,
                     period: str = "", priority: int = 0, input_fingerprint: str = "") -> str:
-        existing = self._connection.execute("""
-            SELECT job_id,status FROM analysis_jobs WHERE job_type=? AND scope_type=? AND scope_id=?
-              AND period=? AND input_fingerprint=?
-        """, (job_type, scope_type, scope_id, period, input_fingerprint)).fetchone()
-        if existing:
-            if existing["status"] not in {"pending", "running"}:
-                now = _now()
-                self._connection.execute("""
-                    UPDATE analysis_jobs SET status='pending',priority=?,available_at=?,updated_at=?
-                    WHERE job_id=?
-                """, (priority, now, now, existing["job_id"]))
-                self._connection.commit()
-            return str(existing["job_id"])
         job_id = _short_id("j")
         now = _now()
-        self._connection.execute(
-            "INSERT INTO analysis_jobs VALUES(?,?,?,?,?,?,?,?,0,?,?,?)",
-            (job_id, job_type, scope_type, scope_id, period, priority, "pending",
-             input_fingerprint, now, now, now),
-        )
+        self._connection.execute("""
+            INSERT INTO analysis_jobs VALUES(?,?,?,?,?,?,?,?,0,?,?,?)
+            ON CONFLICT(job_type,scope_type,scope_id,period,input_fingerprint) DO UPDATE SET
+                status='pending',priority=excluded.priority,
+                available_at=excluded.available_at,updated_at=excluded.updated_at
+            WHERE analysis_jobs.status NOT IN ('pending','running')
+              AND (analysis_jobs.status != 'complete' OR excluded.input_fingerprint='')
+        """, (job_id, job_type, scope_type, scope_id, period, priority, "pending",
+             input_fingerprint, now, now, now))
         self._connection.commit()
-        return job_id
+        row = self._connection.execute("""
+            SELECT job_id FROM analysis_jobs WHERE job_type=? AND scope_type=? AND scope_id=?
+              AND period=? AND input_fingerprint=?
+        """, (job_type, scope_type, scope_id, period, input_fingerprint)).fetchone()
+        return str(row["job_id"])
 
     def complete_job(self, job_id: str, *, success: bool, error: str = "") -> None:
         status = "complete" if success else "failed"
@@ -913,14 +988,91 @@ class MemoryStore:
         if not correction_text.strip():
             raise ValueError("correction_text must not be empty")
         correction_id = _short_id("uc")
+        with self.atomic():
+            self._connection.execute(
+                "INSERT INTO user_corrections(correction_id,target_type,target_id,correction_text,created_at) "
+                "VALUES(?,?,?,?,?)",
+                (correction_id, target_type, target_id, correction_text.strip(), _now()),
+            )
+            self.mark_dirty(target_type, target_id, "user_correction", correction_id)
+        return correction_id
+
+    def active_user_corrections(self, target_type: str, target_id: str) -> list[dict]:
+        rows = self._connection.execute(
+            "SELECT correction_id,correction_text,created_at FROM user_corrections "
+            "WHERE target_type=? AND target_id=? AND status='active' ORDER BY created_at,correction_id",
+            (target_type, target_id),
+        )
+        return [dict(row) for row in rows]
+
+    def record_archive_snapshot(self, scope_type: str, scope_id: str, period: str,
+                                version: int, message_snapshot: str) -> None:
+        self._connection.execute("INSERT INTO analysis_archive_snapshots VALUES(?,?,?,?,?)",
+                                 (scope_type, scope_id, period, version, message_snapshot))
+        self._connection.commit()
+
+    def record_rollup_month_versions(self, conversation_id: str, version: int,
+                                     month_versions: dict[str, int]) -> None:
         self._connection.execute(
-            "INSERT INTO user_corrections(correction_id,target_type,target_id,correction_text,created_at) "
-            "VALUES(?,?,?,?,?)",
-            (correction_id, target_type, target_id, correction_text.strip(), _now()),
+            "INSERT INTO analysis_upstream_month_versions VALUES('conversation',?,'',?,?)",
+            (conversation_id, version, json.dumps(month_versions, sort_keys=True)),
         )
         self._connection.commit()
-        self.mark_dirty(target_type, target_id, "user_correction", correction_id)
-        return correction_id
+
+    def rollup_month_versions(self, conversation_id: str, version: int) -> dict[str, int] | None:
+        row = self._connection.execute(
+            "SELECT versions_json FROM analysis_upstream_month_versions "
+            "WHERE scope_type='conversation' AND scope_id=? AND period='' AND version=?",
+            (conversation_id, version),
+        ).fetchone()
+        return json.loads(row[0]) if row else None
+
+    def analysis_scope_status(self, scope_type: str, scope_id: str, period: str = "") -> list[dict]:
+        """Read one snapshot of the target and its registered upstream graph."""
+        node_type = "conversation_month" if period else scope_type
+        node_id = f"{scope_id}:{period}" if period else scope_id
+        rows = self._connection.execute("""
+            WITH RECURSIVE upstream(node_type,node_id) AS (
+                SELECT ?,?
+                UNION
+                SELECT e.upstream_type,e.upstream_id
+                FROM dependency_edges e JOIN upstream u
+                  ON e.downstream_type=u.node_type AND e.downstream_id=u.node_id
+            ), scopes AS (
+                SELECT node_type,node_id,
+                    CASE WHEN node_type='conversation_month' THEN 'conversation' ELSE node_type END AS scope_type,
+                    CASE WHEN node_type='conversation_month' THEN substr(node_id,1,length(node_id)-8)
+                         ELSE node_id END AS scope_id,
+                    CASE WHEN node_type='conversation_month' THEN substr(node_id,-7) ELSE '' END AS period
+                FROM upstream
+            )
+            SELECT s.node_type,s.node_id,s.scope_type,s.scope_id,s.period,
+                   v.version,v.input_fingerprint AS version_input_fingerprint,a.message_snapshot,
+                   c.message_watermark,c.profile_watermark,c.moment_watermark,c.evidence_count,
+                   c.input_fingerprint AS coverage_input_fingerprint,
+                   (SELECT json_group_array(json_object('reason',d.reason,'source_id',d.source_id,
+                                                        'dirty_since',d.dirty_since))
+                    FROM dirty_nodes d WHERE d.node_type=s.node_type AND d.node_id=s.node_id) AS dirty,
+                   (SELECT json_group_array(json_object('job_id',j.job_id,'job_type',j.job_type,
+                                                        'status',j.status,'updated_at',j.updated_at))
+                    FROM analysis_jobs j WHERE j.scope_type=s.scope_type AND j.scope_id=s.scope_id
+                      AND j.period=s.period AND j.status IN ('pending','running','failed')) AS jobs
+            FROM scopes s
+            LEFT JOIN analysis_versions v ON v.scope_type=s.scope_type AND v.scope_id=s.scope_id
+                AND v.period=s.period AND v.status='current'
+            LEFT JOIN analysis_archive_snapshots a ON a.scope_type=v.scope_type AND a.scope_id=v.scope_id
+                AND a.period=v.period AND a.version=v.version
+            LEFT JOIN analysis_coverage c ON c.scope_type=s.scope_type AND c.scope_id=s.scope_id
+                AND c.period=s.period
+            ORDER BY s.node_type,s.node_id
+        """, (node_type, node_id)).fetchall()
+        return [{**dict(row), "dirty": json.loads(row["dirty"]), "jobs": json.loads(row["jobs"])}
+                for row in rows]
+
+    def current_registered_month_versions(self, conversation_id: str) -> dict[str, int | None]:
+        return {node["period"]: node["version"]
+                for node in self.analysis_scope_status("conversation", conversation_id)
+                if node["node_type"] == "conversation_month" and node["scope_id"] == conversation_id}
 
     def next_jobs(self, limit: int = 20) -> list[dict]:
         rows = self._connection.execute("""
@@ -930,22 +1082,34 @@ class MemoryStore:
         return [dict(row) for row in rows]
 
     def claim_next_job(self, *, worker_id: str = "agent",
-                       job_id: str | None = None) -> dict | None:
-        """Claim the next job, or only the specified pending job when supplied."""
+                       job_id: str | None = None,
+                       scope: tuple[str, str, str] | None = None) -> dict | None:
+        """Claim the highest-priority available job within the supplied filters."""
         now = _now()
         selector = " AND job_id=?" if job_id is not None else ""
         parameters = (now, job_id) if job_id is not None else (now,)
+        if scope is not None:
+            selector += " AND scope_type=? AND scope_id=? AND period=?"
+            parameters += scope
+        no_running_peer = """
+            AND NOT EXISTS (
+                SELECT 1 FROM analysis_jobs active
+                WHERE active.status='running' AND active.job_type=candidate.job_type
+                  AND active.scope_type=candidate.scope_type AND active.scope_id=candidate.scope_id
+                  AND active.period=candidate.period
+            )
+        """
         with self._connection:
             row = self._connection.execute("""
-                SELECT * FROM analysis_jobs WHERE status='pending' AND available_at<=?
-            """ + selector + " ORDER BY priority DESC,created_at LIMIT 1",
+                SELECT candidate.* FROM analysis_jobs candidate WHERE status='pending' AND available_at<=?
+            """ + selector + no_running_peer + " ORDER BY priority DESC,created_at,job_id LIMIT 1",
                 parameters).fetchone()
             if row is None:
                 return None
             changed = self._connection.execute("""
-                UPDATE analysis_jobs SET status='running',attempts=attempts+1,updated_at=?
+                UPDATE analysis_jobs AS candidate SET status='running',attempts=attempts+1,updated_at=?
                 WHERE job_id=? AND status='pending'
-            """, (now, row["job_id"])).rowcount
+            """ + no_running_peer, (now, row["job_id"])).rowcount
             if changed != 1:
                 return None
         result = dict(row)
@@ -1075,6 +1239,43 @@ class MemoryStore:
         self._connection.commit()
         return draft_id
 
+    def reply_memory_version_fingerprint(self, conversation_id: str) -> str:
+        rows = self._connection.execute("""
+            WITH related_people(person_id) AS (
+                SELECT person_id FROM conversation_members WHERE conversation_id=?
+                UNION SELECT person_id FROM people WHERE person_type='self' AND status!='merged'
+            )
+            SELECT scope_type,scope_id,period,version,content_hash FROM analysis_versions
+            WHERE status='current' AND (
+                (scope_type='conversation' AND scope_id=?) OR
+                (scope_type='person' AND scope_id IN (SELECT person_id FROM related_people)) OR
+                (scope_type='relationship' AND scope_id IN (
+                    SELECT relationship_id FROM relationships
+                    WHERE left_person_id IN (SELECT person_id FROM related_people)
+                      AND right_person_id IN (SELECT person_id FROM related_people)
+                ))
+            ) ORDER BY scope_type,scope_id,period
+        """, (conversation_id, conversation_id))
+        return hashlib.sha256(json.dumps([tuple(row) for row in rows]).encode("utf-8")).hexdigest()
+
+    def bind_reply_memory_versions(self, draft_id: str, conversation_id: str,
+                                   expected_fingerprint: str | None = None) -> None:
+        fingerprint = self.reply_memory_version_fingerprint(conversation_id)
+        if expected_fingerprint is not None and fingerprint != expected_fingerprint:
+            raise PermissionError("Reply Memory changed; read the reply context again")
+        self._connection.execute(
+            "INSERT INTO reply_draft_memory_versions VALUES(?,?)",
+            (draft_id, fingerprint),
+        )
+        self._connection.commit()
+
+    def require_reply_memory_versions(self, draft_id: str, conversation_id: str) -> None:
+        row = self._connection.execute(
+            "SELECT fingerprint FROM reply_draft_memory_versions WHERE draft_id=?", (draft_id,)
+        ).fetchone()
+        if row and row[0] != self.reply_memory_version_fingerprint(conversation_id):
+            raise PermissionError("Reply Memory changed; create and confirm a new reply draft")
+
     def create_pending_action(self, action_type: str, target_id: str, payload: dict,
                               expires_at: str | None = None) -> str:
         if not action_type or not target_id:
@@ -1096,14 +1297,15 @@ class MemoryStore:
         ).fetchone()
         if row is None or row["status"] != "pending":
             raise ValueError("action is missing or not pending")
-        if row["expires_at"] and str(row["expires_at"]) < _now():
-            raise PermissionError("action confirmation has expired")
+        _require_unexpired(row['expires_at'])
         confirmation_id = _short_id("acf")
-        self._connection.execute(
+        changed = self._connection.execute(
             "UPDATE pending_actions SET status='confirmed',confirmation_id=?,confirmed_at=? "
-            "WHERE action_id=?", (confirmation_id, _now(), action_id),
+            "WHERE action_id=? AND status='pending'", (confirmation_id, _now(), action_id),
         )
         self._connection.commit()
+        if changed.rowcount != 1:
+            raise PermissionError("action was already confirmed or changed")
         return confirmation_id
 
     def consume_pending_action(self, action_id: str, confirmation_id: str) -> dict:
@@ -1113,16 +1315,19 @@ class MemoryStore:
         ).fetchone()
         if row is None or row["status"] != "confirmed":
             raise PermissionError("valid unconsumed action confirmation required")
-        if row["expires_at"] and str(row["expires_at"]) < _now():
-            raise PermissionError("action confirmation has expired")
+        _require_unexpired(row['expires_at'])
         payload = json.loads(row["payload_json"])
         serialized = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
         if hashlib.sha256(serialized.encode("utf-8")).hexdigest() != row["payload_hash"]:
             raise PermissionError("stored action payload failed integrity validation")
-        self._connection.execute(
-            "UPDATE pending_actions SET status='dispatching' WHERE action_id=?", (action_id,)
+        changed = self._connection.execute(
+            "UPDATE pending_actions SET status='dispatching' WHERE action_id=? "
+            "AND confirmation_id=? AND status='confirmed' AND payload_hash=?",
+            (action_id, confirmation_id, row['payload_hash']),
         )
         self._connection.commit()
+        if changed.rowcount != 1:
+            raise PermissionError("action confirmation was already consumed or changed")
         return payload
 
     def finish_pending_action(self, action_id: str, *, succeeded: bool) -> None:
@@ -1132,23 +1337,29 @@ class MemoryStore:
         )
         self._connection.commit()
 
-    def confirm_reply_draft(self, draft_id: str) -> str:
+    def confirm_reply_draft(self, draft_id: str, *, expected_trigger: str | None = None) -> str:
         row = self._connection.execute(
-            "SELECT status,expires_at FROM reply_drafts WHERE draft_id=?", (draft_id,)
+            "SELECT status,expires_at,conversation_id,trigger_evidence_id FROM reply_drafts WHERE draft_id=?", (draft_id,)
         ).fetchone()
         if row is None or row["status"] != "pending":
             raise ValueError("draft is missing or not pending")
-        if row["expires_at"] and str(row["expires_at"]) < _now():
-            raise PermissionError("draft confirmation has expired")
+        _require_unexpired(row['expires_at'])
+        if expected_trigger is not None and row["trigger_evidence_id"] != expected_trigger:
+            raise PermissionError("Conversation changed; create a new reply draft")
+        self.require_reply_memory_versions(draft_id, row["conversation_id"])
         confirmation_id = _short_id("cf")
-        self._connection.execute(
-            "UPDATE reply_drafts SET status='confirmed',confirmation_id=?,confirmed_at=? WHERE draft_id=?",
+        changed = self._connection.execute(
+            "UPDATE reply_drafts SET status='confirmed',confirmation_id=?,confirmed_at=? "
+            "WHERE draft_id=? AND status='pending'",
             (confirmation_id, _now(), draft_id),
         )
         self._connection.commit()
+        if changed.rowcount != 1:
+            raise PermissionError("draft was already confirmed or changed")
         return confirmation_id
 
-    def consume_confirmation(self, confirmation_id: str, conversation_id: str, text: str) -> str:
+    def consume_confirmation(self, confirmation_id: str, conversation_id: str, text: str,
+                             *, expected_trigger: str | None = None) -> str:
         row = self._connection.execute(
             "SELECT * FROM reply_drafts WHERE confirmation_id=?", (confirmation_id,)
         ).fetchone()
@@ -1156,17 +1367,23 @@ class MemoryStore:
             raise PermissionError("valid unconsumed confirmation required")
         if row["conversation_id"] != conversation_id or row["text"] != text:
             raise PermissionError("confirmation does not match conversation and exact draft text")
-        if row["expires_at"] and str(row["expires_at"]) < _now():
-            raise PermissionError("confirmation has expired")
-        self._connection.execute("UPDATE reply_drafts SET status='dispatching' WHERE draft_id=?",
-                                 (row["draft_id"],))
+        _require_unexpired(row['expires_at'])
+        if expected_trigger is not None and row["trigger_evidence_id"] != expected_trigger:
+            raise PermissionError("Conversation changed; create and confirm a new reply draft")
+        self.require_reply_memory_versions(row["draft_id"], conversation_id)
+        changed = self._connection.execute(
+            "UPDATE reply_drafts SET status='dispatching' WHERE draft_id=? "
+            "AND status='confirmed' AND confirmation_id=? AND conversation_id=? AND text=?",
+            (row["draft_id"], confirmation_id, conversation_id, text))
         self._connection.commit()
+        if changed.rowcount != 1:
+            raise PermissionError("confirmation was already consumed or changed")
         return str(row["draft_id"])
 
-    def finish_reply_dispatch(self, draft_id: str, *, sent: bool) -> None:
+    def finish_reply_dispatch(self, draft_id: str, *, sent: bool, dispatched: bool = False) -> None:
         self._connection.execute(
             "UPDATE reply_drafts SET status=?,sent_at=? WHERE draft_id=? AND status='dispatching'",
-            ("sent" if sent else "failed", _now() if sent else None, draft_id),
+            ("sent" if sent else "unknown" if dispatched else "failed", _now() if sent else None, draft_id),
         )
         self._connection.commit()
 

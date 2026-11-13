@@ -27,19 +27,25 @@ class MomentsMonitor:
     def scan_once(self, limit: int = 100) -> dict:
         from wechat_auto.storage import MomentStore
         feeds = self.backend.read_latest(limit=limit)
-        ids = [str(feed.get("id") or feed.get("tid") or "") for feed in feeds]
         with MomentStore(self.database_path) as store:
-            known = store.existing_ids(ids)
-            new_feeds = [feed for feed in feeds if str(feed.get("id") or feed.get("tid") or "") not in known]
-            saved = store.save(new_feeds)
+            # Existing IDs may carry edited text or new comments/likes. Preserve
+            # their versions too; only genuinely new IDs produce action requests.
+            saved, inserted = store.save_with_new_ids(feeds)
+        # Match storage normalization, retaining the last payload if one input
+        # repeats an ID. Authorization still applies to the resulting request.
+        unique_new = {str(feed.get('id') or feed.get('tid')).strip(): feed for feed in feeds
+                      if str(feed.get('id') or feed.get('tid')).strip() in inserted}
+        new_feeds = list(unique_new.values())
         actions = []
         for feed in new_feeds:
-            username = str(feed.get("username", ""))
+            username = str(feed.get("username", "")).strip()
             actions.append({
-                "kind": "like_moment", "moment_id": str(feed.get("id") or feed.get("tid") or ""),
+                "kind": "like_moment", "moment_id": str(feed.get("id") or feed.get("tid") or "").strip(),
                 "username": username, "author": str(feed.get("nickname", "")),
                 "auto_eligible": username in self.auto_like_usernames,
                 "requires_foreground_verification": True,
-                "requires_confirmation": username not in self.auto_like_usernames,
+                # The configured list expresses preference, never authorization
+                # for a particular external action on this exact Moment.
+                "requires_confirmation": True,
             })
         return {"new_feeds": new_feeds, "rows_saved": saved, "actions": actions}

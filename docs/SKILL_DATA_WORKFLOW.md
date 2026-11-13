@@ -34,7 +34,7 @@
 | sync.capture_contact_profile | 唯一且身份核验的资料页显式字段补采与索引 | 不猜测隐藏签名或身份 |
 | sync.load_contact_moments | 逐人有界 UI 加载后重新读取本地库 | 不证明远程完整覆盖、不授权媒体下载 |
 | sync.moments_coverage | 读取目标人物的缓存/UI 覆盖记录 | 不是好友删除证明 |
-| analysis.jobs / analysis.claim_job | 有限 pending 列表 / 原子领取下一任务；可选 job_id 只领取该 pending 任务 | 列表空不代表依赖就绪；没有按任意 scope 自动过滤发现任务的接口 |
+| analysis.jobs / analysis.claim_job | 有限 pending 列表 / 按可选 job_id 或精确 scope 原子领取 | 列表空不代表依赖就绪；analysis.scope_status 可查询目标及已登记上游的任务和版本索引 |
 | analysis.get_*_input | 读取当前归档或已存在 Memory 作为分析输入 | 不自动执行同步或外部 Agent 分析 |
 | analysis.submit | 提交完整 Markdown、短 Claim/Event 与覆盖；后端计算输入指纹 | 不接受客户端伪造的指纹或自动补齐未完成上游 |
 | charts.refresh | 根据已有结构化结果生成视图 | 不更新来源或完成分析 |
@@ -109,7 +109,7 @@ Skill 名当成可调用函数；联动本身不授权创建代理、后台任�
 事件更新反向影响会话/人物时，只处理真正变化的依赖，不能形成无限刷新循环。
 领取任务后核对返回的 scope_type/scope_id/period，不把别的范围任务当作当前任务
 提交或完成；已核对目标任务 ID 时用可选 job_id 精确领取。指定任务不存在、未到可运行
-时间或已在运行时返回空，不回退到其他任务。未知任务 ID 的范围发现仍需调度器处理。
+时间或已在运行时返回空，不回退到其他任务。未知任务 ID 时可按 scope_type、scope_id 和 period 精确领取；空 period 表示对象汇总层。
 
 ## 运行时边界
 

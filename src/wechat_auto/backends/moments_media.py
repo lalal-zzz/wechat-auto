@@ -10,6 +10,9 @@ def download_approved_item(item: dict, archive, *, confirm: bool = False) -> dic
     """Fetch one reviewed manifest item, validate it, and persist its BLOB."""
     if not confirm:
         raise PermissionError('One exact media item requires explicit confirmation')
+    if (item.get('kind') not in {'image', 'video'} or not isinstance(item.get('index'), int)
+            or item['index'] < 0):
+        raise ValueError('Reviewed image/video kind and nonnegative item index required')
     import hashlib
     import urllib.error
     import urllib.parse

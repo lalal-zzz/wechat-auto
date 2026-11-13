@@ -56,6 +56,7 @@ def test_two_close_glyphs_are_ambiguous_and_do_not_produce_a_control():
 
 def test_profile_album_entry_uses_current_thumbnail_strip_and_rejects_ambiguity():
     import numpy as np
+
     from wechat_auto.primitives.page_controls import find_contact_album_entry
 
     image = Image.new('RGB', (1000, 800), (30, 30, 30))

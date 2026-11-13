@@ -1,6 +1,28 @@
+import sqlite3
+
+import pytest
+
 from wechat_auto.memory import AnalysisService, MarkdownMemory, MemoryStore
-from wechat_auto.memory.indexer import ArchiveIndexer, message_period
+from wechat_auto.memory.indexer import ArchiveIndexer, _readonly, message_period
 from wechat_auto.storage import HistoryStore, MomentStore, ProfileStore
+
+
+@pytest.mark.parametrize("fail", [False, True])
+def test_readonly_source_special_path_closes_on_all_exits(tmp_path, fail):
+    path = tmp_path / "history #1.sqlite3"
+    with sqlite3.connect(path) as setup:
+        setup.execute("CREATE TABLE sample(value TEXT)")
+    try:
+        with _readonly(path) as source:
+            assert source.execute("SELECT count(*) FROM sample").fetchone()[0] == 0
+            with pytest.raises(sqlite3.OperationalError, match="readonly"):
+                source.execute("INSERT INTO sample VALUES ('blocked')")
+            if fail:
+                raise ValueError("simulated read failure")
+    except ValueError:
+        assert fail
+    with pytest.raises(sqlite3.ProgrammingError, match="closed"):
+        source.execute("SELECT 1")
 
 
 def test_archive_indexer_references_raw_archives_and_queues_months(tmp_path):
@@ -28,6 +50,56 @@ def test_message_period_accepts_epoch_and_iso_text():
     assert message_period("1731664346") == "2024-11"
     assert message_period("2026-09-01 10:00:00") == "2026-09"
     assert message_period("bad") == ""
+
+
+def test_history_index_rolls_back_cursor_and_jobs_together(tmp_path, monkeypatch):
+    history_path = tmp_path / "history.sqlite3"
+    with HistoryStore(history_path) as history, MemoryStore(tmp_path / "memory.sqlite3") as memory:
+        indexer = ArchiveIndexer(memory)
+        history.save_messages([{"id": "baseline", "chat": "wxid_test_one", "time": "2026-10-01"}])
+        baseline = indexer.index_history(history_path)["cursor"]
+        history.save_messages([{"id": "backfill", "chat": "wxid_test_two", "time": "2026-09-01"}])
+        set_cursor = memory.set_sync_cursor
+
+        def fail_after_cursor(*args):
+            set_cursor(*args)
+            raise RuntimeError("simulated index failure")
+
+        with monkeypatch.context() as patch:
+            patch.setattr(memory, "set_sync_cursor", fail_after_cursor)
+            with pytest.raises(RuntimeError, match="simulated index failure"):
+                indexer.index_history(history_path, batch_size=1)
+        assert memory.get_sync_cursor("history_index", str(history_path)) == str(baseline)
+        assert memory.next_jobs() == []
+        assert memory._connection.execute("SELECT count(*) FROM dirty_nodes WHERE source_id='backfill'").fetchone()[0] == 0
+        assert memory._connection.execute("SELECT count(*) FROM conversations").fetchone()[0] == 1
+
+        recovered = indexer.index_history(history_path, batch_size=1)
+        assert recovered["messages_seen"] == recovered["months_dirtied"] == 1
+        assert [job["period"] for job in memory.next_jobs()] == ["2026-09"]
+        assert indexer.index_history(history_path, batch_size=1)["messages_seen"] == 0
+
+
+def test_history_index_keeps_new_input_queued_while_month_is_running(tmp_path):
+    history_path = tmp_path / "history.sqlite3"
+    memory_path = tmp_path / "memory.sqlite3"
+    with HistoryStore(history_path) as history, MemoryStore(memory_path) as memory, MemoryStore(memory_path) as worker:
+        indexer = ArchiveIndexer(memory)
+        base = {"chat": "wxid_test_one", "time": "2026-09-01"}
+        history.save_messages([{**base, "id": "baseline", "content": "baseline"}])
+        indexer.index_history(history_path)
+        history.save_messages([{**base, "id": "first", "content": "first"}])
+        indexer.index_history(history_path)
+        running = worker.claim_next_job()
+        assert running["input_fingerprint"].startswith("message-batch:")
+
+        history.save_messages([{**base, "id": "second", "content": "second"}])
+        indexer.index_history(history_path)
+        pending, = memory.next_jobs()
+        assert pending["input_fingerprint"] != running["input_fingerprint"]
+        assert worker.claim_next_job(job_id=pending["job_id"]) is None
+        worker.complete_job(running["job_id"], success=True)
+        assert worker.claim_next_job()["job_id"] == pending["job_id"]
 
 
 def test_profile_and_moment_updates_dirty_people_without_copying_body(tmp_path):

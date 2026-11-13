@@ -2,7 +2,10 @@
 from __future__ import annotations
 
 import argparse
-from contextlib import asynccontextmanager
+import logging
+import sqlite3
+from contextlib import ExitStack, asynccontextmanager, closing
+from datetime import date
 from pathlib import Path
 from typing import Any
 
@@ -29,10 +32,21 @@ def _mcp_class():
         return FastMCP
 
 
+def _redact_mcp_trace(record: logging.LogRecord) -> bool:
+    if record.exc_info or record.exc_text or record.stack_info:
+        record.msg = "MCP request failed"
+        record.args = ()
+        record.exc_info = None
+        record.exc_text = None
+        record.stack_info = None
+    return True
+
+
 def create_server(*, memory_db: str, memory_root: str,
                   history_db: str | None = None, moments_db: str | None = None,
                   profiles_db: str | None = None, basic_skill=None,
-                  conversation_backend=None, voice_model_path: str | None = None):
+                  conversation_backend=None, voice_model_path: str | None = None,
+                  runtime_health: dict | None = None):
     """Create an MCP server without opening a network listener."""
     MCPServer = _mcp_class()
     store = MemoryStore(memory_db)
@@ -126,6 +140,12 @@ def create_server(*, memory_db: str, memory_root: str,
             },
             "counts": store.database_summary(),
             "pending_jobs": store.next_jobs(20),
+            "runtime": runtime_health or {
+                "ui": {"status": "available" if basic_skill is not None else "not_configured"},
+                "conversation_backend": {
+                    "status": "available" if conversation_backend is not None else "not_configured"
+                },
+            },
         }
 
     @server.tool(name="vision.page_catalog")
@@ -179,9 +199,116 @@ def create_server(*, memory_db: str, memory_root: str,
         """List queued incremental analysis work."""
         return store.next_jobs(limit)
 
+    def validate_analysis_scope(scope_type: str, scope_id: str, period: str) -> None:
+        if scope_type not in {"conversation", "person", "relationship", "group", "event"} or not scope_id.strip():
+            raise ValueError("A supported scope type and stable scope ID are required")
+        if period:
+            if scope_type != "conversation" or len(period) != 7:
+                raise ValueError("Only conversation scopes support a YYYY-MM period")
+            date.fromisoformat(period + "-01")
+
+    def compare_month_archive(node: dict) -> str:
+        if not history_db or not node["message_snapshot"]:
+            return "unknown"
+        conversation = store.get_conversation(node["scope_id"])
+        if conversation is None:
+            return "unknown"
+        from wechat_auto.storage import HistoryStore
+        try:
+            snapshot = HistoryStore.read_month_message_snapshot(history_db, conversation["source_chat_id"], node["period"])
+        except sqlite3.Error:
+            return "unknown"
+        return "matches" if snapshot == node["message_snapshot"] else "changed"
+
+    def read_latest_message(contact: str) -> tuple[str, dict]:
+        if conversation_backend is None:
+            raise PermissionError("Current conversation cannot be verified")
+        try:
+            message, = conversation_backend.get_context(contact, limit=1)
+            if int(message.get("sort_seq") or 0) <= 0 or not (message.get("local_id") or message.get("server_id")):
+                raise ValueError("Missing stable message identity")
+            from wechat_auto.storage import make_message_id
+            return make_message_id(contact, message.get("local_id"), message.get("sort_seq"),
+                                   message.get("server_id"), message.get("type")), message
+        except Exception:
+            raise PermissionError("Current conversation cannot be verified") from None
+
+    def compare_live_head(scope_id: str, period: str) -> str:
+        conversation = store.get_conversation(scope_id)
+        if not history_db or conversation is None or conversation_backend is None:
+            return "unknown"
+        from wechat_auto.memory.indexer import message_period
+        from wechat_auto.storage.history_store import make_message_fingerprint
+
+        chat = conversation["source_chat_id"]
+        try:
+            message_id, message = read_latest_message(chat)
+            if period:
+                observed_period = message_period(message.get("create_time"))
+                if not observed_period:
+                    return "unknown"
+                if observed_period != period:
+                    return "outside_period"
+            with closing(sqlite3.connect(Path(history_db).resolve().as_uri() + "?mode=ro", uri=True)) as archive:
+                archive.execute("BEGIN")
+                if archive.execute("SELECT 1 FROM messages WHERE id=? AND chat=?", (message_id, chat)).fetchone():
+                    return "id_matches"
+                fingerprint = make_message_fingerprint(
+                    chat, message.get("create_time"), str(message.get("content", "")),
+                    str(message.get("sender_username", "")), message.get("type"), message.get("sort_seq"),
+                )
+                if archive.execute("SELECT 1 FROM messages WHERE chat=? AND fingerprint=? LIMIT 1",
+                                   (chat, fingerprint)).fetchone():
+                    return "fingerprint_matches"
+                return "missing"
+        except (PermissionError, sqlite3.Error):
+            return "unknown"
+
+    @server.tool(name="analysis.scope_status")
+    def analysis_scope_status(scope_type: str, scope_id: str, period: str = "",
+                              check_live_head: bool = False) -> dict:
+        """Report recorded analysis state for a target and its registered upstream nodes."""
+        validate_analysis_scope(scope_type, scope_id, period)
+        nodes = store.analysis_scope_status(scope_type, scope_id, period)
+        archive_comparison = "unknown"
+        if period:
+            current = next(node for node in nodes if (node["scope_type"], node["scope_id"], node["period"])
+                           == (scope_type, scope_id, period))
+            archive_comparison = compare_month_archive(current)
+        return {"scope_type": scope_type, "scope_id": scope_id, "period": period,
+                "source_freshness": "unknown", "dependency_readiness": "unknown",
+                "archive_comparison": archive_comparison,
+                "live_head_archive_comparison": compare_live_head(scope_id, period)
+                if check_live_head and scope_type == "conversation" else "unknown",
+                "nodes": nodes}
+
+    def require_current_months_for(conversation_id: str) -> list[dict]:
+        conversation = store.get_conversation(conversation_id)
+        if not history_db or conversation is None:
+            raise ValueError("Local archive coverage cannot be verified")
+        try:
+            archive_periods = indexer.history_periods(history_db, conversation["source_chat_id"])
+        except sqlite3.Error:
+            raise ValueError("Local archive coverage cannot be verified") from None
+        months = [node for node in store.analysis_scope_status("conversation", conversation_id)
+                  if node["node_type"] == "conversation_month" and node["scope_id"] == conversation_id]
+        registered = {node["period"] for node in months}
+        if not registered or (archive_periods | set(markdown.list_periods(conversation_id))) - registered:
+            raise ValueError("Monthly input registration is incomplete; verify archive coverage first")
+        inputs = []
+        for node in months:
+            if node["version"] is None or any(job["status"] in {"pending", "running"} for job in node["jobs"]):
+                raise ValueError("Registered monthly analysis is unfinished")
+            if compare_month_archive(node) != "matches":
+                raise ValueError("Registered monthly analysis cannot be verified against the local archive")
+            body = markdown.read_version("conversation", conversation_id, node["version"], node["period"])
+            inputs.append({"period": node["period"], "version": node["version"], "memory": body})
+        return inputs
+
     @server.tool(name="analysis.get_month_input")
     def analysis_get_month_input(conversation_id: str, period: str,
-                                 after_id: str = "", limit: int = 1000) -> dict:
+                                 after_id: str = "", limit: int = 1000,
+                                 expected_message_snapshot: str | None = None) -> dict:
         """Read one bounded raw month page for an explicitly claimed analysis job."""
         if not history_db:
             raise RuntimeError("history database is not configured")
@@ -190,37 +317,77 @@ def create_server(*, memory_db: str, memory_root: str,
             raise ValueError("conversation not found")
         from wechat_auto.storage import HistoryStore
         with HistoryStore(history_db) as history:
+            history._connection.execute("BEGIN")
+            message_snapshot = history.month_message_snapshot(conversation["source_chat_id"], period)
+            if expected_message_snapshot is not None and expected_message_snapshot != message_snapshot:
+                raise ValueError("Archived month changed; restart reading from the first page")
             messages = history.fetch_month(conversation["source_chat_id"], period,
                                            after_id=after_id, limit=limit)
         return {"conversation_id": conversation_id, "period": period,
                 "messages": messages, "count": len(messages),
+                "message_snapshot": message_snapshot,
                 "next_after_id": messages[-1]["id"] if len(messages) == limit else ""}
 
     @server.tool(name="analysis.get_conversation_input")
-    def analysis_get_conversation_input(conversation_id: str) -> dict:
+    def analysis_get_conversation_input(conversation_id: str, require_current_months: bool = False) -> dict:
         """Read current monthly memories for a cross-month conversation rollup."""
-        periods = markdown.list_periods(conversation_id)
-        return {"conversation_id": conversation_id, "months": [
+        months = require_current_months_for(conversation_id) if require_current_months else [
             {"period": period,
              "memory": markdown.read_current("conversation", conversation_id, period)}
-            for period in periods
-        ]}
+            for period in markdown.list_periods(conversation_id)
+        ]
+        return {"conversation_id": conversation_id,
+                "user_corrections": store.active_user_corrections("conversation", conversation_id),
+                "months": months,
+                **({"upstream_month_versions": {item["period"]: item["version"] for item in months}}
+                   if require_current_months else {})}
+
+    def require_person_rollups(conversations: list[dict]) -> list[dict]:
+        if not conversations:
+            raise ValueError("No linked conversations; verify analysis dependencies first")
+        inputs = []
+        for item in conversations:
+            conversation_id = item["conversation_id"]
+            months = {month["period"]: month["version"] for month in require_current_months_for(conversation_id)}
+            rollup = store.current_version("conversation", conversation_id)
+            if not rollup:
+                raise ValueError("Linked conversation summary is unfinished")
+            version = rollup["version"]
+            if store.rollup_month_versions(conversation_id, version) != months:
+                raise ValueError("Linked conversation summary does not cover the verified monthly versions")
+            inputs.append({"conversation": item, "version": version,
+                           "memory": markdown.read_version("conversation", conversation_id, version)})
+        return inputs
 
     @server.tool(name="analysis.get_person_input")
-    def analysis_get_person_input(person_id: str, claim_limit: int = 100) -> dict:
+    def analysis_get_person_input(person_id: str, claim_limit: int = 100,
+                                  require_current_months: bool = False) -> dict:
         """Read compact cross-context inputs for one person's incremental analysis."""
         conversations = store.person_conversations(person_id)
-        return {"person_id": person_id, "claims": context.compact_claims(
+        inputs = require_person_rollups(conversations) if require_current_months else [
+            {"conversation": item, "memory": markdown.read_current("conversation", item["conversation_id"])}
+            for item in conversations
+        ]
+        return {"person_id": person_id,
+                "user_corrections": store.active_user_corrections("person", person_id),
+                "claims": context.compact_claims(
                     person_id=person_id, limit=claim_limit),
-                "conversations": [{"conversation": item,
-                    "memory": markdown.read_current("conversation", item["conversation_id"])}
-                    for item in conversations],
-                "current_person_memory": markdown.read_current("person", person_id)}
+                "conversations": inputs,
+                "current_person_memory": markdown.read_current("person", person_id),
+                **({"upstream_conversation_versions": {
+                    item["conversation"]["conversation_id"]: item["version"] for item in inputs
+                }} if require_current_months else {})}
 
     @server.tool(name="analysis.claim_job")
-    def analysis_claim_job(worker_id: str = "agent", job_id: str | None = None) -> dict | None:
-        """Claim the next job or a specified pending job without taking another scope."""
-        return store.claim_next_job(worker_id=worker_id, job_id=job_id)
+    def analysis_claim_job(worker_id: str = "agent", job_id: str | None = None,
+                           scope_type: str = "", scope_id: str = "",
+                           period: str = "") -> dict | None:
+        """Claim a pending job by ID and/or exact scope, or take the next unfiltered job."""
+        scope = None
+        if scope_type or scope_id or period:
+            validate_analysis_scope(scope_type, scope_id, period)
+            scope = (scope_type, scope_id, period)
+        return store.claim_next_job(worker_id=worker_id, job_id=job_id, scope=scope)
 
     @server.tool(name="analysis.complete_job")
     def analysis_complete_job(job_id: str, success: bool, error: str = "") -> dict:
@@ -235,14 +402,62 @@ def create_server(*, memory_db: str, memory_root: str,
                         events: list[dict] | None = None,
                         coverage: dict | None = None,
                         mode: str = "incremental",
-                        expected_parent: int | None = None) -> dict:
+                        expected_parent: int | None = None,
+                        correction_ids: list[str] | None = None,
+                        expected_message_snapshot: str | None = None,
+                        expected_upstream_month_versions: dict[str, int] | None = None,
+                        expected_upstream_conversation_versions: dict[str, int] | None = None) -> dict:
         """Commit structured results and one compact full Markdown version atomically."""
-        return analysis.submit(
-            scope_type=scope_type, scope_id=scope_id, period=period,
-            markdown=markdown_text, evidence_ids=evidence_ids,
-            template_version=template_version, claims=claims or (), events=events or (),
-            coverage=coverage, mode=mode, expected_parent=expected_parent,
-        )
+        if correction_ids:
+            active_ids = {item["correction_id"] for item in store.active_user_corrections(scope_type, scope_id)}
+            if not set(correction_ids) <= active_ids:
+                raise ValueError("Correction IDs must be active and belong to the analysis target")
+        with ExitStack() as resources:
+            if expected_upstream_conversation_versions is not None:
+                if scope_type != "person" or period or not history_db:
+                    raise ValueError("Upstream conversation versions require a person analysis and an archive")
+                if Path(history_db).samefile(memory_db):
+                    raise ValueError("Protected publication requires separate archive and Memory databases")
+                from wechat_auto.storage import HistoryStore
+                history = resources.enter_context(HistoryStore(history_db))
+                resources.enter_context(history.protect_archive_snapshot())
+                versions = {item["conversation"]["conversation_id"]: item["version"]
+                            for item in require_person_rollups(store.person_conversations(scope_id))}
+                if versions != expected_upstream_conversation_versions:
+                    raise ValueError("Upstream conversation versions changed; read the person inputs again")
+            if expected_upstream_month_versions is not None:
+                if scope_type != "conversation" or period or not history_db:
+                    raise ValueError("Upstream monthly versions require a conversation rollup and an archive")
+                if Path(history_db).samefile(memory_db):
+                    raise ValueError("Protected publication requires separate archive and Memory databases")
+                from wechat_auto.storage import HistoryStore
+                history = resources.enter_context(HistoryStore(history_db))
+                resources.enter_context(history.protect_archive_snapshot())
+                versions = {item["period"]: item["version"] for item in require_current_months_for(scope_id)}
+                if versions != expected_upstream_month_versions:
+                    raise ValueError("Upstream monthly versions changed; read the rollup inputs again")
+            if expected_message_snapshot is not None:
+                if scope_type != "conversation" or not period or not history_db:
+                    raise ValueError("Message snapshot requires a conversation month and an archive")
+                conversation = store.get_conversation(scope_id)
+                if conversation is None:
+                    raise ValueError("Conversation not found")
+                if Path(history_db).samefile(memory_db):
+                    raise ValueError("Protected publication requires separate archive and Memory databases")
+                from wechat_auto.storage import HistoryStore
+                history = resources.enter_context(HistoryStore(history_db))
+                snapshot = resources.enter_context(history.protect_month_snapshot(conversation["source_chat_id"], period))
+                if snapshot != expected_message_snapshot:
+                    raise ValueError("Archived month changed; restart reading before submitting")
+            return analysis.submit(
+                scope_type=scope_type, scope_id=scope_id, period=period,
+                markdown=markdown_text, evidence_ids=evidence_ids,
+                template_version=template_version, claims=claims or (), events=events or (),
+                coverage=coverage, mode=mode, expected_parent=expected_parent,
+                correction_ids=correction_ids or (), message_snapshot=expected_message_snapshot,
+                upstream_month_versions=expected_upstream_month_versions,
+                upstream_conversation_versions=expected_upstream_conversation_versions,
+            )
 
     @server.tool(name="claims.get")
     def claims_get(claim_id: str, include_evidence_refs: bool = False) -> dict | None:
@@ -374,6 +589,11 @@ def create_server(*, memory_db: str, memory_root: str,
         """Read a prior complete Markdown memory version."""
         return markdown.read_version(scope_type, scope_id, version, period)
 
+    @server.tool(name="memory.recover_publication")
+    def memory_recover_publication(scope_type: str, scope_id: str, period: str = "") -> dict:
+        """Preserve unindexed candidates in work/analysis; restore only successful text."""
+        return markdown.recover_publication(scope_type, scope_id, period)
+
     @server.tool(name="memory.compare_versions")
     def memory_compare_versions(scope_type: str, scope_id: str, left: int,
                                 right: int, period: str = "") -> str:
@@ -398,25 +618,47 @@ def create_server(*, memory_db: str, memory_root: str,
     @server.tool(name="reply.create_draft")
     def reply_create_draft(conversation_id: str, trigger_evidence_id: str,
                            text: str, context_fingerprint: str,
-                           expires_at: str = "") -> dict:
+                           expires_at: str = "", expected_memory_version_fingerprint: str | None = None) -> dict:
         """Save a reply candidate without touching WeChat."""
-        draft_id = store.create_reply_draft(conversation_id, trigger_evidence_id, text,
-                                            context_fingerprint, expires_at or None)
+        with store.atomic():
+            draft_id = store.create_reply_draft(conversation_id, trigger_evidence_id, text,
+                                                context_fingerprint, expires_at or None)
+            store.bind_reply_memory_versions(draft_id, conversation_id, expected_memory_version_fingerprint)
         return {"draft_id": draft_id, "sent": False, "requires_confirmation": True}
+
+    def reply_context_with_versions(conversation_id: str, messages: list[dict], **kwargs) -> dict:
+        fingerprint = store.reply_memory_version_fingerprint(conversation_id)
+        result = context.reply_context(conversation_id, messages, **kwargs)
+        if store.reply_memory_version_fingerprint(conversation_id) != fingerprint:
+            raise PermissionError("Reply Memory changed while reading; read the reply context again")
+        return {**result, "memory_version_fingerprint": fingerprint}
 
     @server.tool(name="reply.build_context")
     def reply_build_context(conversation_id: str, current_messages: list[dict],
                             person_id: str = "", claim_limit: int = 20,
                             pending_limit: int = 200, pending_after_id: str = "") -> dict:
         """Combine formal Markdown Memory, unanalysed archive pages and current messages."""
-        return context.reply_context(conversation_id, current_messages,
+        return reply_context_with_versions(conversation_id, current_messages,
                                      person_id=person_id or None, claim_limit=claim_limit,
                                      pending_limit=pending_limit, pending_after_id=pending_after_id)
+
+    def current_reply_trigger(contact: str) -> str:
+        return read_latest_message(contact)[0]
 
     @server.tool(name="reply.confirm")
     def reply_confirm(draft_id: str) -> dict:
         """Confirm one exact saved draft; this still does not send it."""
-        confirmation_id = store.confirm_reply_draft(draft_id)
+        trigger = None
+        if conversation_backend is not None:
+            row = store._connection.execute(
+                "SELECT c.source_chat_id FROM reply_drafts d JOIN conversations c USING(conversation_id) "
+                "WHERE d.draft_id=?", (draft_id,),
+            ).fetchone()
+            if row is None:
+                raise ValueError("Draft conversation not found")
+            trigger = current_reply_trigger(row["source_chat_id"])
+        with store.atomic():
+            confirmation_id = store.confirm_reply_draft(draft_id, expected_trigger=trigger)
         return {"draft_id": draft_id, "confirmation_id": confirmation_id,
                 "sent": False, "confirmation_is_single_use": True}
 
@@ -519,21 +761,47 @@ def create_server(*, memory_db: str, memory_root: str,
         def reply_send_confirmed(confirmation_id: str, conversation_id: str,
                                  contact: str, text: str) -> dict:
             """Consume an exact confirmation, then send through BasicSkill."""
-            members = store._connection.execute(
-                "SELECT m.person_id FROM conversation_members m JOIN people p USING(person_id) "
-                "JOIN conversations c ON c.conversation_id=m.conversation_id "
-                "WHERE m.conversation_id=? AND c.conversation_type='direct' AND p.person_type<>'self'",
-                (conversation_id,)).fetchall()
-            if any(contact_state.get(row[0])['automatic_send_blocked'] for row in members):
-                raise PermissionError('Recipient relationship state blocks dispatch; review required')
-            draft_id = store.consume_confirmation(confirmation_id, conversation_id, text)
+            conversation = store.get_conversation(conversation_id)
+            if (not conversation or conversation['conversation_type'] != 'direct'
+                    or conversation['source_chat_id'] != contact):
+                raise PermissionError('Stable recipient does not match the confirmed direct conversation')
+            def verify_contact_state() -> None:
+                if contact == "filehelper":
+                    return
+                members = store._connection.execute(
+                    "SELECT DISTINCT m.person_id,p.person_type,i.identity_value "
+                    "FROM conversation_members m JOIN people p USING(person_id) "
+                    "LEFT JOIN person_identities i ON i.person_id=m.person_id "
+                    "AND i.identity_type='wxid' AND i.identity_value=? "
+                    "WHERE m.conversation_id=? AND m.valid_to IS NULL AND p.person_type<>'self'",
+                    (contact, conversation_id),
+                ).fetchall()
+                if len(members) != 1 or members[0]["person_type"] != "contact" or members[0]["identity_value"] != contact:
+                    raise PermissionError("Current contact identity is missing or ambiguous; dispatch stopped")
+                state = contact_state.get(members[0]["person_id"])
+                if state["presence"] not in {"active", "restored"} or state["automatic_send_blocked"]:
+                    raise PermissionError("Recipient relationship state blocks dispatch; review required")
+
+            verify_contact_state()
+            trigger = current_reply_trigger(contact)
+            with store.atomic():
+                draft_id = store.consume_confirmation(confirmation_id, conversation_id, text, expected_trigger=trigger)
+
+            def before_dispatch() -> None:
+                if current_reply_trigger(contact) != trigger:
+                    raise PermissionError("Conversation changed during preparation; dispatch stopped")
+                verify_contact_state()
+                store.require_reply_memory_versions(draft_id, conversation_id)
+
             try:
                 result = basic_skill.execute(action="send_text", contact=contact,
-                                             text=text, confirm=True)
+                                             text=text, confirm=True, before_dispatch=before_dispatch)
             except Exception:
                 store.finish_reply_dispatch(draft_id, sent=False)
                 raise
-            store.finish_reply_dispatch(draft_id, sent=True)
+            store.finish_reply_dispatch(draft_id, sent=result.get('sent') is True
+                                        and result.get('success') is True,
+                                        dispatched=result.get('dispatched') is True)
             return {"draft_id": draft_id, "result": result}
 
     if conversation_backend is not None:
@@ -550,6 +818,7 @@ def create_server(*, memory_db: str, memory_root: str,
         def monitor_run_once(username: str, context_limit: int = 30) -> dict:
             """Archive and process one persistent-cursor pass; an external scheduler invokes it."""
             from wechat_auto.memory.indexer import message_period
+            from wechat_auto.storage import make_message_id
 
             archive_result = None
             if history_db:
@@ -562,22 +831,35 @@ def create_server(*, memory_db: str, memory_root: str,
             conversation = store.ensure_conversation(
                 username, conversation_type="group" if username.endswith("@chatroom") else "direct"
             )
-            for item in update["all_messages"]:
-                period = message_period(item.get("create_time"))
-                if not period:
-                    continue
-                message_id = str(item.get("server_id") or item.get("local_id") or item.get("sort_seq"))
-                analysis.mark_message_delta(conversation, period, message_id)
-            store.set_sync_cursor("reply_monitor", username, update["watermark"])
             normalized_context = [{
+                "chat": username, "conversation_id": conversation,
                 "time": str(item.get("create_time", "")),
                 "sender": str(item.get("sender_name") or item.get("sender_username") or ""),
                 "content": str(item.get("content", "")),
-                "id": str(item.get("server_id") or item.get("sort_seq") or ""),
+                "id": make_message_id(username, item.get("local_id"), item.get("sort_seq"),
+                                      item.get("server_id"), item.get("type")),
             } for item in current]
-            reply_context = context.reply_context(conversation, normalized_context)
+            reply_context = reply_context_with_versions(conversation, normalized_context)
+            with store.atomic():
+                committed = int(store.get_sync_cursor("reply_monitor", username) or 0)
+                monthly_ids: dict[str, list[str]] = {}
+                for item in update["all_messages"]:
+                    if int(item.get("sort_seq") or 0) <= committed:
+                        continue
+                    period = message_period(item.get("create_time"))
+                    if period:
+                        monthly_ids.setdefault(period, []).append(make_message_id(
+                            username, item.get("local_id"), item.get("sort_seq"),
+                            item.get("server_id"), item.get("type"),
+                        ))
+                for period, message_ids in monthly_ids.items():
+                    store.queue_month_message_delta(conversation, period, message_ids)
+                watermark = max(committed, int(update["watermark"]))
+                if watermark > committed:
+                    store.set_sync_cursor("reply_monitor", username, watermark)
+            new_messages = [item for item in update["messages"] if int(item.get("sort_seq") or 0) > committed]
             return {"username": username, "conversation_id": conversation,
-                    "watermark": update["watermark"], "new_messages": update["messages"],
+                    "watermark": watermark, "new_messages": new_messages,
                     "reply_context": reply_context, "archive": archive_result,
                     "sent": False, "requires_confirmation": True}
 
@@ -592,28 +874,66 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--voice-model-path", help="existing local model for ASR during archive writes")
     parser.add_argument("--moments-db")
     parser.add_argument("--profiles-db")
+    parser.add_argument("--secret-dir", default="data/.secrets",
+                        help="local DPAPI-protected database keys")
     parser.add_argument("--with-wechat-runtime", action="store_true",
                         help="Attach to the logged-in Weixin client and register confirmed action tools")
     args = parser.parse_args(argv)
     runtime = None
     backend = None
-    if args.with_wechat_runtime:
-        from wechat_auto.backends import DatabaseConversationBackend
-        from wechat_auto.engine import AgentLoop
-        runtime = AgentLoop().connect()
-        backend = DatabaseConversationBackend()
-    server = create_server(
-        memory_db=args.memory_db, memory_root=args.memory_root,
-        history_db=args.history_db, moments_db=args.moments_db,
-        profiles_db=args.profiles_db,
-        basic_skill=runtime.basic_skill if runtime else None,
-        conversation_backend=backend, voice_model_path=args.voice_model_path,
-    )
+    server = None
+    resources = ExitStack()
+    health = {"ui": {"status": "not_configured"},
+              "conversation_backend": {"status": "not_configured"}}
     try:
+        if args.with_wechat_runtime:
+            from wechat_auto.backends import DatabaseConversationBackend
+            from wechat_auto.backends.dpapi_db import open_dpapi_wechat_db
+            from wechat_auto.engine import AgentLoop
+            runtime = AgentLoop()
+            try:
+                runtime.connect()
+            except Exception as exc:
+                health["ui"] = {"status": "unavailable", "error_type": type(exc).__name__}
+                health["conversation_backend"] = {"status": "unavailable", "reason": "ui_unavailable"}
+                runtime.disconnect()
+                runtime = None
+            else:
+                health["ui"] = {"status": "available"}
+                try:
+                    database = resources.enter_context(open_dpapi_wechat_db(
+                        args.secret_dir, database_names=('contact.db',), include_message_family=True))
+                    backend = DatabaseConversationBackend(database)
+                except Exception as exc:
+                    health["conversation_backend"] = {
+                        "status": "unavailable", "error_type": type(exc).__name__
+                    }
+                else:
+                    health["conversation_backend"] = {"status": "available"}
+        server = create_server(
+            memory_db=args.memory_db, memory_root=args.memory_root,
+            history_db=args.history_db, moments_db=args.moments_db,
+            profiles_db=args.profiles_db,
+            basic_skill=runtime.basic_skill if runtime else None,
+            conversation_backend=backend, voice_model_path=args.voice_model_path,
+            runtime_health=health,
+        )
+        # SDK exception rendering can include request arguments and frame locals.
+        for name in ("mcp.server.mcpserver.server", "mcp.server.fastmcp.server", "mcp.server.lowlevel.server"):
+            logger = logging.getLogger(name)
+            logger.addFilter(_redact_mcp_trace)
+            resources.callback(logger.removeFilter, _redact_mcp_trace)
         server.run(transport="stdio")
     finally:
-        if runtime is not None:
-            runtime.disconnect()
+        try:
+            try:
+                if server is not None:
+                    server._wechat_auto_store.close()
+            finally:
+                resources.close()
+        finally:
+            if runtime is not None:
+                runtime.disconnect()
 
 
 if __name__ == "__main__":

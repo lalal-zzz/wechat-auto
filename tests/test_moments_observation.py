@@ -1,7 +1,10 @@
-from PIL import Image, ImageDraw
 import pytest
+from PIL import Image, ImageDraw
 
-from wechat_auto.primitives.moments_observation import observe_album_sections, merge_album_sections
+from wechat_auto.primitives.moments_observation import (
+    merge_album_sections,
+    observe_album_sections,
+)
 
 
 def box(text, x=620, y=180):

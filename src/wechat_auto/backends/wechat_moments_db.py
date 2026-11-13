@@ -1,6 +1,9 @@
 """Read and archive Moments using the optional local-database backend."""
 from __future__ import annotations
 
+from wechat_auto.backends.database_resource import DatabaseResourceOwner
+from wechat_auto.backends.replica_import import replica_module
+
 
 class MomentMediaDownloadError(RuntimeError):
     """Safe failure details without the private media URL or dynamic content."""
@@ -12,26 +15,28 @@ class MomentMediaDownloadError(RuntimeError):
         super().__init__(f'{self.failure_code}:{len(saved)}/{expected}')
 
 
-class DatabaseMomentsBackend:
-    def __init__(self, db=None):
-        if db is None:
-            from wechatauto import WeChatDB
-            db = WeChatDB()
-        from wechatauto import MomentDB
-        self._db = db
-        self._moments = MomentDB(db)
+class DatabaseMomentsBackend(DatabaseResourceOwner):
+    def __init__(self, db=None, *, secret_dir="data/.secrets"):
+        super().__init__(db, secret_dir=secret_dir, database_names=('contact.db', 'sns.db'))
+        try:
+            self._moments = replica_module().MomentDB(self._db)
+        except BaseException:
+            self.close()
+            raise
 
     def resolve_user(self, query: str) -> dict:
         from wechat_auto.backends.wechatauto_db import DatabaseConversationBackend
         return DatabaseConversationBackend(self._db).resolve_chat(query)
 
     def read_latest(self, limit: int = 20, username: str | None = None) -> list[dict]:
+        self._ensure_open()
         if limit <= 0:
             raise ValueError("limit must be positive")
         return [dict(feed) for feed in self._moments.get_moments(limit=limit, username=username)]
 
     def read_all_available(self, username: str | None = None) -> list[dict]:
         """Read all locally available rows, not an entire remote timeline."""
+        self._ensure_open()
         return [dict(feed) for feed in self._moments.get_moments(limit=0, username=username)]
 
     def archive_latest(self, database_path: str, *, limit: int = 20, username: str | None = None) -> dict:
@@ -64,6 +69,7 @@ class DatabaseMomentsBackend:
         ``plan_media_download`` to the user and pass ``confirm=True`` only
         after approval; this method never silently starts network traffic.
         """
+        self._ensure_open()
         if not confirm:
             raise PermissionError("Moment media download requires confirm=True after user approval")
         expected = len(feed.get('images') or []) + len(feed.get('videos') or [])

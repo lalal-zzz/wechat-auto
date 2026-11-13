@@ -141,6 +141,14 @@ python -m pip install -r requirements-ocr.txt
 
 These files cover their respective integrations, not a finished one-click Windows installer. Win32 integrations also require their Python/runtime dependencies. OCR initialization may download model files; subsequent inference uses the local cache.
 
+For local voice transcription, install `requirements-speech.txt` and point the transcription command at an existing model. If CPU transcription in a Windows Conda environment fails with `OMP: Error #15`, set `$env:MKL_THREADING_LAYER = 'SEQUENTIAL'` in the current PowerShell session before starting the process, or use a dedicated speech environment. See the [Intel oneMKL Windows guide](https://www.intel.com/content/www/us/en/docs/onemkl/developer-guide-windows/2026-0/dynamic-select-the-interface-and-threading-layer.html).
+
+### Upgrade, roll back, and uninstall
+
+1. Stop the MCP client and the project's sync, analysis, and monitor processes. Record the configured database, Memory, secret, and export paths. Back up the project SQLite databases, the matching Memory directory, and `data/analysis_sources.json`. If a SQLite WAL remains, use the SQLite backup API or preserve it alongside its database after all connections close.
+2. Install the new dependencies in a separate checkout and Python environment. Start offline MCP against copies of the backup and verify `status.summary`, published Markdown versions, and representative archived records before switching the client. To roll back, restore the previous code, dependencies, and matching data backup together.
+3. To uninstall, remove the client MCP entry and any installed project skills, then remove the dedicated Python environment and checkout. For private data cleanup, review project databases, Memory, screenshots, logs, exports, work directories, source manifests, and `data/.secrets/`. Include paths configured outside the checkout and backups you no longer need. Keep archives and backups you intend to retain. WeChat manages its client and `xwechat_files` separately.
+
 ### Read-only page inspection
 
 ```powershell
@@ -175,6 +183,12 @@ python -m wechat_auto.mcp_server `
 Bootstrap indexes evidence and queues jobs; it does not run complete LLM analysis or invent conclusions. Initial selection covers the five highest-volume eligible private chats and five groups across their available months; later work updates affected nodes.
 
 Connect an MCP-capable external agent to the stdio process. The server is model-agnostic; external models have their own data-handling settings. Add `--with-wechat-runtime` only for workflows needing the logged-in client; runtime prerequisites and recipient-safe dispatch validation still apply.
+
+The MCP runtime opens the database using local DPAPI keys; configure their directory with `--secret-dir data/.secrets`. If a client or database dependency is unavailable, `status.summary.runtime` reports startup diagnostics while available offline tools remain usable.
+
+After an interrupted analysis publication, `memory.recover_publication` preserves unindexed candidates under local `data/work/analysis/` and restores only indexed text. It does not promote candidates or mark a run successful.
+
+Direct `DatabaseConversationBackend` and `DatabaseMomentsBackend` instances also default to DPAPI-backed local reads. Use `with` or call `close()` to release their working copies. An injected `db` remains owned by its caller.
 
 Tool areas: sync.*, entities.*, claims.*, events.*, analysis.*, memory.*, evidence.*, charts.*, monitor.*, reply.*, actions.*, vision.* and status.*. Availability depends on injected backends and runtime components.
 

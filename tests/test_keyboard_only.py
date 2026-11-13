@@ -5,6 +5,37 @@ import pytest
 from wechat_auto.primitives.keyboard_only import KeyboardOnlyDriver
 
 
+def test_native_backspace_keys_stay_on_focused_hwnd_with_scan_codes():
+    driver = KeyboardOnlyDriver(_FakeApplication(), foreground_mode='never')
+    with patch.object(driver, '_focused_input_hwnd', return_value=42), \
+         patch('wechat_auto.primitives.keyboard_only.user32') as api, \
+         patch.object(driver, '_settle_ui'):
+        api.MapVirtualKeyW.return_value = 0x0e
+        driver.erase_backward(3)
+    assert [call.args for call in api.PostMessageW.call_args_list] == [
+        (42, 0x100, 8, 0x000e0001), (42, 0x101, 8, 0xc00e0001)] * 3
+    api.SendMessageW.assert_not_called()
+
+
+def test_extended_native_key_sets_extended_and_release_bits():
+    driver = KeyboardOnlyDriver(_FakeApplication(), foreground_mode='never')
+    with patch.object(driver, '_focused_input_hwnd', return_value=42), \
+         patch('wechat_auto.primitives.keyboard_only.user32') as api:
+        api.MapVirtualKeyW.return_value = 0xe04f
+        driver._wm_key(0x23, True)
+        driver._wm_key(0x23, False)
+    assert [call.args[3] for call in api.PostMessageW.call_args_list] == [0x014f0001, 0xc14f0001]
+
+
+@pytest.mark.parametrize('count', [0, -1, True])
+def test_invalid_backspace_count_never_dispatches(count):
+    driver = KeyboardOnlyDriver(_FakeApplication(), foreground_mode='never')
+    with patch('wechat_auto.primitives.keyboard_only.user32') as api:
+        with pytest.raises(ValueError):
+            driver.erase_backward(count)
+        api.PostMessageW.assert_not_called()
+
+
 def test_unicode_units_and_control_rejection():
     driver = KeyboardOnlyDriver(_FakeApplication(), input_mode="wmchar")
     with patch("wechat_auto.primitives.keyboard_only.user32") as api:
@@ -21,6 +52,24 @@ class _FakeApplication:
 
     def activate(self):
         return None
+
+
+def test_hover_sends_only_mousemove_and_never_clicks_or_types():
+    driver = KeyboardOnlyDriver(_FakeApplication(), foreground_mode='never')
+    driver._rect = lambda: (0, 0, 1000, 800)
+    with patch('wechat_auto.primitives.keyboard_only.user32') as api:
+        api.ScreenToClient.return_value = 1
+        driver.hover_window_fraction(.4, .3)
+        api.SendMessageW.assert_called_once_with(1, 0x200, 0, 400 | (240 << 16))
+        api.PostMessageW.assert_not_called()
+        api.reset_mock()
+        with pytest.raises(ValueError):
+            driver.hover_window_fraction(-.1, .3)
+        api.SendMessageW.assert_not_called()
+        api.ScreenToClient.return_value = 0
+        with pytest.raises(RuntimeError, match='ScreenToClient'):
+            driver.hover_window_fraction(.4, .3)
+        api.SendMessageW.assert_not_called()
 
 
 def test_divider_drag_keeps_button_pressed_and_releases_on_failure():
@@ -64,7 +113,8 @@ def test_embedded_tab_click_targets_browser_child_not_main():
         api.ScreenToClient.return_value = 1
         driver.click_content_fraction(.8, .1)
     assert {c.args[0] for c in api.SendMessageW.call_args_list} == {42}
-    assert [c.args[1] for c in api.SendMessageW.call_args_list] == [0x200, 0x201, 0x202]
+    assert [c.args[1] for c in api.SendMessageW.call_args_list] == [0x21, 0x20, 0x200, 0x201, 0x202]
+    assert api.SendMessageW.call_args_list[0].args[2:] == (1, 1 | (0x201 << 16))
 
 
 def test_missing_embedded_hwnd_never_falls_back_to_main_click():
@@ -177,6 +227,6 @@ def test_restore_mode_click_is_synchronous_and_restores_foreground():
         api.IsWindow.return_value = 1
         driver.click_window_fraction(.2, .3)
     assert [call.args[1] for call in api.SendMessageW.call_args_list] == [
-        0x0200, 0x0201, 0x0202,
+        0x0021, 0x0020, 0x0200, 0x0201, 0x0202,
     ]
     api.SetForegroundWindow.assert_called_once_with(99)
